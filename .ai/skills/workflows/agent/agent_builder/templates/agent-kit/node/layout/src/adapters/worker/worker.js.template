@@ -1,97 +1,145 @@
-import fs from 'fs';
-import path from 'path';
-import { loadConfig, log } from '../../core/config.js';
-import { runAgent } from '../../core/agent.js';
-import { toErrorResponse } from '../../core/errors.js';
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+const fs = require('fs');
+const path = require('path');
+const { runAgent } = require('../../core/run');
+const { nowIso } = require('../../core/util');
 
 function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
 }
 
-function moveToDir(filePath, dir) {
-  ensureDir(dir);
-  const dest = path.join(dir, path.basename(filePath));
-  fs.renameSync(filePath, dest);
+function listJsonFiles(dir) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter(f => f.endsWith('.json'))
+    .map(f => path.join(dir, f));
 }
 
-function listJsonFiles(dir) {
-  try {
-    return fs.readdirSync(dir)
-      .filter((f) => f.endsWith('.json'))
-      .map((f) => path.join(dir, f));
-  } catch {
-    return [];
+function moveFile(src, dstDir) {
+  ensureDir(dstDir);
+  const dst = path.join(dstDir, path.basename(src));
+  fs.renameSync(src, dst);
+  return dst;
+}
+
+// Simple semaphore for concurrency control
+class Semaphore {
+  constructor(max) {
+    this.max = max;
+    this.current = 0;
+    this.queue = [];
+  }
+
+  async acquire() {
+    if (this.current < this.max) {
+      this.current++;
+      return;
+    }
+    await new Promise(resolve => this.queue.push(resolve));
+    this.current++;
+  }
+
+  release() {
+    this.current--;
+    if (this.queue.length > 0) {
+      const next = this.queue.shift();
+      next();
+    }
+  }
+
+  async run(fn) {
+    await this.acquire();
+    try {
+      return await fn();
+    } finally {
+      this.release();
+    }
   }
 }
 
-async function processFile(filePath, cfg) {
-  const started = Date.now();
-  const name = path.basename(filePath);
-  const requestId = 'wkr_' + name.replace(/\W+/g, '_');
-  const doneDir = path.join(cfg.worker.inputDir, '.done');
-  const failedDir = path.join(cfg.worker.inputDir, '.failed');
-
+async function processOne(filePath, outDir, doneDir, failedDir) {
   let req;
   try {
-    const raw = fs.readFileSync(filePath, 'utf8');
-    req = JSON.parse(raw);
-  } catch (err) {
-    const e = toErrorResponse(err);
-    log('error', { msg: 'worker_bad_input', file: filePath, error: e });
-    // Move to output as error
-    const outPath = path.join(cfg.worker.outputDir, name.replace(/\.json$/, '.error.json'));
-    fs.writeFileSync(outPath, JSON.stringify(e, null, 2));
-    moveToDir(filePath, failedDir);
+    req = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (e) {
+    // invalid JSON → failed
+    const errOut = { type: 'error', timestamp: nowIso(), data: { code: 'invalid_json', message: String(e && e.message ? e.message : e) } };
+    const outFile = path.join(outDir, path.basename(filePath).replace(/\.json$/, '.error.json'));
+    ensureDir(outDir);
+    fs.writeFileSync(outFile, JSON.stringify(errOut, null, 2));
+    moveFile(filePath, failedDir);
     return;
   }
 
   try {
-    const output = await runAgent(req, { requestId });
-    const outPath = path.join(cfg.worker.outputDir, name.replace(/\.json$/, '.out.json'));
-    fs.writeFileSync(outPath, JSON.stringify(output, null, 2));
-    moveToDir(filePath, doneDir);
-    log('info', { msg: 'worker_processed', file: filePath, durationMs: Date.now() - started });
-  } catch (err) {
-    const e = toErrorResponse(err);
-    const outPath = path.join(cfg.worker.outputDir, name.replace(/\.json$/, '.error.json'));
-    fs.writeFileSync(outPath, JSON.stringify(e, null, 2));
-    moveToDir(filePath, failedDir);
-    log('error', { msg: 'worker_failed', file: filePath, durationMs: Date.now() - started, error: e });
-  }
-}
-
-async function main() {
-  const cfg = loadConfig();
-  ensureDir(cfg.worker.inputDir);
-  ensureDir(cfg.worker.outputDir);
-
-  const concurrency = Number(process.env.AGENT_WORKER_CONCURRENCY || 2);
-  log('info', { msg: 'worker_start', inputDir: cfg.worker.inputDir, outputDir: cfg.worker.outputDir, concurrency });
-
-  const inFlight = new Set();
-
-  while (true) {
-    const files = listJsonFiles(cfg.worker.inputDir);
-    for (const f of files) {
-      if (inFlight.size >= concurrency) break;
-      if (inFlight.has(f)) continue;
-
-      const p = processFile(f, cfg)
-        .catch(() => {})
-        .finally(() => inFlight.delete(f));
-      inFlight.add(f);
+    const result = await runAgent(req, { responseMode: 'async' });
+    ensureDir(outDir);
+    if (!result.ok) {
+      const outFile = path.join(outDir, `${req.request_id || path.basename(filePath)}.error.json`);
+      fs.writeFileSync(outFile, JSON.stringify(result.error, null, 2));
+      moveFile(filePath, failedDir);
+      return;
     }
-
-    await sleep(cfg.worker.pollIntervalMs);
+    const outFile = path.join(outDir, `${req.request_id || path.basename(filePath)}.out.json`);
+    fs.writeFileSync(outFile, JSON.stringify(result.response, null, 2));
+    moveFile(filePath, doneDir);
+  } catch (e) {
+    const outFile = path.join(outDir, `${req.request_id || path.basename(filePath)}.error.json`);
+    ensureDir(outDir);
+    fs.writeFileSync(outFile, JSON.stringify({ error: String(e && e.message ? e.message : e) }, null, 2));
+    moveFile(filePath, failedDir);
   }
 }
 
-main().catch((err) => {
-  const e = toErrorResponse(err);
-  log('error', { msg: 'worker_crash', error: e });
-  process.exit(1);
-});
+async function run() {
+  const inDir = process.env.AGENT_WORKER_INPUT_DIR || './var/worker/in';
+  const outDir = process.env.AGENT_WORKER_OUTPUT_DIR || './var/worker/out';
+
+  ensureDir(inDir);
+  ensureDir(outDir);
+
+  const doneDir = path.join(inDir, '.done');
+  const failedDir = path.join(inDir, '.failed');
+  ensureDir(doneDir);
+  ensureDir(failedDir);
+
+  // Concurrency control: default 4, configurable via env
+  const maxConcurrency = Number(process.env.AGENT_WORKER_MAX_CONCURRENCY || 4);
+  const semaphore = new Semaphore(maxConcurrency);
+
+  console.log(`[worker] watching inDir=${inDir} outDir=${outDir} maxConcurrency=${maxConcurrency}`);
+
+  const pollMs = Number(process.env.AGENT_WORKER_POLL_MS || 1000);
+
+  // Track files currently being processed to avoid duplicate processing
+  const processingFiles = new Set();
+
+  // Polling loop with concurrent processing
+  setInterval(async () => {
+    try {
+      const files = listJsonFiles(inDir)
+        .filter(p => !p.includes(path.sep + '.done' + path.sep))
+        .filter(p => !p.includes(path.sep + '.failed' + path.sep))
+        .filter(p => !processingFiles.has(p));
+
+      for (const f of files) {
+        processingFiles.add(f);
+        // Process concurrently with semaphore limit
+        semaphore.run(async () => {
+          try {
+            await processOne(f, outDir, doneDir, failedDir);
+          } finally {
+            processingFiles.delete(f);
+          }
+        }).catch(() => {
+          processingFiles.delete(f);
+        });
+      }
+    } catch (e) {
+      // Ignore polling errors
+    }
+  }, pollMs);
+}
+
+if (require.main === module) run();
+
+module.exports = { run, Semaphore };

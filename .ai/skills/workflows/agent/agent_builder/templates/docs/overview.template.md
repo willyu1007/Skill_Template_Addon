@@ -1,24 +1,25 @@
-# Agent Overview
+# {{agent_name}} (`{{agent_id}}`) — Overview
 
 ## Summary
-<One sentence>
+{{agent_summary}}
 
 ## Owners
-- <owner>
+{{owners_list}}
 
-## Entrypoints
-- API: <...>
-- Worker: <...>
-- SDK: <...>
-- Cron: <...>
-- Pipeline: <...>
+## Primary embedding
+- Primary: API (HTTP)
+- Attachments: {{attach_list}}
+
+## Entry points
+{{entrypoints_table}}
 
 ## Scope
 ### In scope
-- <...>
+{{in_scope_list}}
 
 ### Out of scope
-- <...>
+{{out_of_scope_list}}
 
-## Definition of Done
-<...>
+### Definition of Done
+{{definition_of_done}}
+

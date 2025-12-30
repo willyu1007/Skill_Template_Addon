@@ -1,1 +1,5 @@
-export { runAgent } from '../../core/agent.js';
+const { runAgent } = require('../../core/run');
+
+module.exports = {
+  runAgent
+};

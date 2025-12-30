@@ -1,14 +1,21 @@
-# Data Flow
-
-## Summary
-<Describe where inputs come from, what is sent to the LLM, and where outputs go.>
+# {{agent_name}} — Data flow and compliance
 
 ## Data classification
-- <PII/sensitive/other>
+- classes: {{data_classes}}
 
-## Mermaid diagram
-```mermaid
-flowchart LR
-  A[Upstream] --> B[Agent]
-  B --> C[Downstream]
-```
+## LLM egress
+{{llm_egress_notes}}
+
+## Conversation / state
+- mode: {{conversation_mode}}
+- scope: {{conversation_scope}}
+- storage: {{conversation_storage_kind}}
+- retention: ttl={{conversation_ttl_seconds}}s, max_items={{conversation_max_items}}
+- redaction: {{conversation_redaction_mode}}
+
+### Summary strategy (if applicable)
+{{conversation_summary_notes}}
+
+## Retention
+{{retention_notes}}
+

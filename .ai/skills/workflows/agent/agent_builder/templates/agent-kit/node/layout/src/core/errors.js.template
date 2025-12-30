@@ -1,15 +1,11 @@
-export class AgentError extends Error {
-  constructor(code, message, details) {
-    super(message);
-    this.name = 'AgentError';
-    this.code = code;
-    this.details = details || {};
-  }
+function agentError({ contract_version, code, message, retryable, details }) {
+  return {
+    contract_version,
+    code,
+    message,
+    retryable: !!retryable,
+    details: details || {}
+  };
 }
 
-export function toErrorResponse(err) {
-  if (err && err.code && err.message) {
-    return { code: String(err.code), message: String(err.message), details: err.details || {} };
-  }
-  return { code: 'UNKNOWN_ERROR', message: String(err?.message || err || 'Unknown error'), details: {} };
-}
+module.exports = { agentError };

@@ -1,1400 +1,2617 @@
 #!/usr/bin/env node
-
 /**
- * agent_builder helper script (dependency-free).
+ * agent-builder.js
+ *
+ * Dependency-free helper for a 5-stage (A–E) agent build flow.
+ *
+ * Stage A: Interview notes + integration decision (TEMP workdir only; do not write repo)
+ * Stage B: Blueprint JSON (TEMP workdir)
+ * Stage C: Scaffold agent module + docs + registry (repo writes; no overwrite; registry merge)
+ * Stage D: Implement (manual / project-specific)
+ * Stage E: Verify + cleanup (delete TEMP workdir)
  *
  * Commands:
- *   start
- *   status --workdir <dir>
- *   validate-blueprint --workdir <dir> [--blueprint <path>] [--format json|text]
- *   plan --workdir <dir> --repo-root <repo> [--apply]   (plan is always dry-run; apply is separate)
- *   apply --workdir <dir> --repo-root <repo> --apply
- *   approve --workdir <dir> --stage <A|B|C|D|E>
- *   finish --workdir <dir> [--force]
+ *   - start
+ *   - status
+ *   - approve
+ *   - validate-blueprint
+ *   - plan
+ *   - apply
+ *   - finish
+ *
+ * Notes:
+ * - This script intentionally has no dependencies other than Node.js.
  */
 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
+const http = require('http');
+const net = require('net');
+const { spawn } = require('child_process');
 
-const SKILL_ROOT = path.resolve(__dirname, '..');
-const TEMPLATES = path.join(SKILL_ROOT, 'templates');
+function usage(exitCode = 0) {
+  const msg = `
+agent-builder.js
 
-const STATE_FILE = '.agent-builder-state.json';
+Commands:
+  start
+    --workdir <path>             Workdir path. Default: create under OS temp dir.
+    --repo-root <path>           Repo root to remember (default: cwd). No writes in start.
+
+  status
+    --workdir <path>             Workdir path (required unless AGENT_BUILDER_WORKDIR is set)
+
+  approve
+    --workdir <path>             Workdir path
+    --stage <A|B|C|D|E>           Stage to approve (A and B required before apply)
+
+  validate-blueprint
+    --workdir <path>             Workdir path
+    --format <text|json>          Output format (default: text)
+
+  plan
+    --workdir <path>             Workdir path
+    --repo-root <path>           Repo root (default: cwd)
+
+  apply
+    --workdir <path>             Workdir path
+    --repo-root <path>           Repo root (default: cwd)
+    --apply                       Actually write to repo (otherwise dry-run)
+
+  verify
+    --workdir <path>             Workdir path
+    --repo-root <path>           Repo root (default: cwd)
+    --format <text|json>          Output format (default: text)
+
+  finish
+    --workdir <path>             Workdir path
+    --apply                       Actually delete the workdir (otherwise dry-run)
+
+Examples:
+  node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js start
+  node .../agent-builder.js approve --workdir <WORKDIR> --stage A
+  node .../agent-builder.js validate-blueprint --workdir <WORKDIR>
+  node .../agent-builder.js approve --workdir <WORKDIR> --stage B
+  node .../agent-builder.js plan --workdir <WORKDIR> --repo-root .
+  node .../agent-builder.js apply --workdir <WORKDIR> --repo-root . --apply
+  node .../agent-builder.js verify --workdir <WORKDIR> --repo-root .
+  node .../agent-builder.js finish --workdir <WORKDIR> --apply
+`;
+  console.log(msg.trim());
+  process.exit(exitCode);
+}
+
+function die(msg, code = 1) {
+  console.error(msg);
+  process.exit(code);
+}
+
+function parseArgs(argv) {
+  const args = argv.slice(2);
+  const out = { _: [] };
+  let i = 0;
+  while (i < args.length) {
+    const a = args[i];
+    if (a.startsWith('-')) {
+      const key = a.replace(/^--?/, '');
+      const next = args[i + 1];
+      if (next && !next.startsWith('-')) {
+        out[key] = next;
+        i += 2;
+      } else {
+        out[key] = true;
+        i += 1;
+      }
+    } else {
+      out._.push(a);
+      i += 1;
+    }
+  }
+  return out;
+}
 
 function nowIso() {
   return new Date().toISOString();
 }
 
-function randId(n = 6) {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  let s = '';
-  for (let i = 0; i < n; i++) s += chars[Math.floor(Math.random() * chars.length)];
-  return s;
+function randomId() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return crypto.randomBytes(8).toString('hex');
 }
 
-function parseArgs(argv) {
-  const out = { _: [] };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a.startsWith('--')) {
-      const key = a.slice(2);
-      const next = argv[i + 1];
-      if (!next || next.startsWith('-')) {
-        out[key] = true;
-      } else {
-        out[key] = next;
-        i++;
-      }
-    } else {
-      out._.push(a);
+function readJson(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+function writeJson(filePath, obj) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(obj, null, 2) + '\n', 'utf8');
+}
+
+function readText(filePath) {
+  return fs.readFileSync(filePath, 'utf8');
+}
+
+function writeText(filePath, content) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, 'utf8');
+}
+
+function exists(p) {
+  try { fs.accessSync(p); return true; } catch { return false; }
+}
+
+function safeResolve(repoRoot, relPath) {
+  const abs = path.resolve(repoRoot, relPath);
+  const root = path.resolve(repoRoot);
+  if (!abs.startsWith(root + path.sep) && abs !== root) {
+    throw new Error(`Unsafe path (escapes repo root): ${relPath}`);
+  }
+  return abs;
+}
+
+function isTempWorkdir(p) {
+  const tmp = path.resolve(os.tmpdir());
+  const abs = path.resolve(p);
+  return abs.startsWith(tmp + path.sep) && abs.includes(`${path.sep}agent_builder${path.sep}`);
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function findFreePort() {
+  return await new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.unref();
+    s.on('error', reject);
+    s.listen(0, '127.0.0.1', () => {
+      const addr = s.address();
+      const port = addr && typeof addr === 'object' ? addr.port : null;
+      s.close(() => resolve(port));
+    });
+  });
+}
+
+async function httpJson({ method, hostname, port, path: reqPath, headers, body, timeoutMs }) {
+  const payload = body ? JSON.stringify(body) : '';
+  const h = Object.assign({ 'content-type': 'application/json' }, headers || {});
+  if (payload) h['content-length'] = Buffer.byteLength(payload);
+
+  return await new Promise((resolve, reject) => {
+    const req = http.request({
+      method: method || 'GET',
+      hostname: hostname || '127.0.0.1',
+      port,
+      path: reqPath,
+      headers: h,
+      timeout: timeoutMs || 5000
+    }, (res) => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        let json = null;
+        try { json = text ? JSON.parse(text) : null; } catch (e) {}
+        resolve({ statusCode: res.statusCode, headers: res.headers, text, json });
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => {
+      try { req.destroy(new Error('timeout')); } catch (e) {}
+    });
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+// ----------------------------
+// SSE (Server-Sent Events) client for verify harness
+// ----------------------------
+
+async function httpSseCollect({ hostname, port, path: reqPath, method, headers, body, timeoutMs }) {
+  const payload = body ? JSON.stringify(body) : '';
+  const h = Object.assign({
+    'content-type': 'application/json',
+    'accept': 'text/event-stream'
+  }, headers || {});
+  if (payload) h['content-length'] = Buffer.byteLength(payload);
+
+  return await new Promise((resolve, reject) => {
+    const events = [];
+    let buffer = '';
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { req.destroy(); } catch (e) {}
+      resolve({ statusCode: 0, events, timedOut: true });
+    }, timeoutMs || 8000);
+
+    const req = http.request({
+      method: method || 'POST',
+      hostname: hostname || '127.0.0.1',
+      port,
+      path: reqPath,
+      headers: h
+    }, (res) => {
+      res.setEncoding('utf8');
+
+      res.on('data', (chunk) => {
+        buffer += chunk;
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6).trim();
+            if (dataStr === '[DONE]') continue;
+            try {
+              const evt = JSON.parse(dataStr);
+              events.push(evt);
+            } catch (e) {
+              // Ignore non-JSON SSE data
+            }
+          }
+        }
+      });
+
+      res.on('end', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ statusCode: res.statusCode, events });
+      });
+    });
+
+    req.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+// ----------------------------
+// Minimal WebSocket client (dependency-free)
+//
+// Used by verify harness to test the generated agent's WebSocket streaming endpoint.
+// Supports:
+// - client handshake
+// - sending masked text frames
+// - receiving unmasked text frames
+// - ping/pong
+//
+// Limitations (acceptable for verify harness):
+// - no permessage-deflate
+// - no fragmented frames
+// ----------------------------
+
+function wsBuildAcceptValue(secWebSocketKey) {
+  return crypto.createHash('sha1')
+    .update(String(secWebSocketKey) + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+    .digest('base64');
+}
+
+function wsEncodeClientTextFrame(text) {
+  const payload = Buffer.from(String(text), 'utf8');
+  const len = payload.length;
+
+  let header;
+  if (len < 126) {
+    header = Buffer.alloc(2);
+    header[0] = 0x81; // FIN + text
+    header[1] = 0x80 | len; // masked + length
+  } else if (len < 65536) {
+    header = Buffer.alloc(4);
+    header[0] = 0x81;
+    header[1] = 0x80 | 126;
+    header.writeUInt16BE(len, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x81;
+    header[1] = 0x80 | 127;
+    header.writeBigUInt64BE(BigInt(len), 2);
+  }
+
+  const mask = crypto.randomBytes(4);
+  const masked = Buffer.alloc(len);
+  for (let i = 0; i < len; i++) masked[i] = payload[i] ^ mask[i % 4];
+
+  return Buffer.concat([header, mask, masked]);
+}
+
+function wsEncodeClientCloseFrame() {
+  // Close with empty payload
+  const header = Buffer.from([0x88, 0x80]); // FIN+close, masked+0
+  const mask = crypto.randomBytes(4);
+  return Buffer.concat([header, mask]);
+}
+
+function wsEncodeClientPongFrame(payloadBuf) {
+  const payload = payloadBuf ? Buffer.from(payloadBuf) : Buffer.alloc(0);
+  const len = payload.length;
+
+  let header;
+  if (len < 126) {
+    header = Buffer.alloc(2);
+    header[0] = 0x8A; // FIN + pong
+    header[1] = 0x80 | len;
+  } else {
+    header = Buffer.alloc(4);
+    header[0] = 0x8A;
+    header[1] = 0x80 | 126;
+    header.writeUInt16BE(len, 2);
+  }
+
+  const mask = crypto.randomBytes(4);
+  const masked = Buffer.alloc(len);
+  for (let i = 0; i < len; i++) masked[i] = payload[i] ^ mask[i % 4];
+
+  return Buffer.concat([header, mask, masked]);
+}
+
+function wsTryParseFrame(buffer) {
+  if (!buffer || buffer.length < 2) return null;
+
+  const b0 = buffer[0];
+  const b1 = buffer[1];
+  const fin = (b0 & 0x80) !== 0;
+  const opcode = b0 & 0x0f;
+  const masked = (b1 & 0x80) !== 0;
+  let payloadLen = (b1 & 0x7f);
+  let offset = 2;
+
+  if (!fin) return { error: 'fragmented_frames_not_supported' };
+
+  if (payloadLen === 126) {
+    if (buffer.length < offset + 2) return null;
+    payloadLen = buffer.readUInt16BE(offset);
+    offset += 2;
+  } else if (payloadLen === 127) {
+    if (buffer.length < offset + 8) return null;
+    const big = buffer.readBigUInt64BE(offset);
+    const n = Number(big);
+    if (!Number.isFinite(n)) return { error: 'payload_too_large' };
+    payloadLen = n;
+    offset += 8;
+  }
+
+  const maskLen = masked ? 4 : 0;
+  const frameLen = offset + maskLen + payloadLen;
+  if (buffer.length < frameLen) return null;
+
+  let payload = buffer.slice(offset + maskLen, frameLen);
+
+  if (masked) {
+    const mask = buffer.slice(offset, offset + 4);
+    const out = Buffer.alloc(payloadLen);
+    for (let i = 0; i < payloadLen; i++) out[i] = payload[i] ^ mask[i % 4];
+    payload = out;
+  }
+
+  return {
+    frame: { opcode, payload, masked },
+    rest: buffer.slice(frameLen)
+  };
+}
+
+async function wsSendAndCollectJson({ hostname, port, pathname, headers, sendObj, timeoutMs, stopWhen }) {
+  const host = hostname || '127.0.0.1';
+  const toMs = Number.isFinite(timeoutMs) ? timeoutMs : 8000;
+
+  return await new Promise((resolve, reject) => {
+    const socket = net.connect(port, host);
+    socket.setNoDelay(true);
+
+    let settled = false;
+
+    function settleResolve(value) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // Keep an error listener to avoid unhandled ECONNRESET after resolve.
+      try { socket.on('error', () => {}); } catch (e) {}
+      try { socket.end(); } catch (e) {}
+      setTimeout(() => { try { socket.destroy(); } catch (e) {} }, 25);
+      resolve(value);
     }
+
+    function settleReject(err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { socket.on('error', () => {}); } catch (e) {}
+      try { socket.destroy(); } catch (e) {}
+      reject(err);
+    }
+
+    const key = crypto.randomBytes(16).toString('base64');
+    const lines = [
+      `GET ${pathname} HTTP/1.1`,
+      `Host: ${host}:${port}`,
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      `Sec-WebSocket-Key: ${key}`,
+      'Sec-WebSocket-Version: 13'
+    ];
+
+    const extraHeaders = headers || {};
+    for (const [k, v] of Object.entries(extraHeaders)) {
+      // Do not allow overriding critical WS handshake headers
+      const kl = String(k).toLowerCase();
+      if (['host','upgrade','connection','sec-websocket-key','sec-websocket-version'].includes(kl)) continue;
+      lines.push(`${k}: ${v}`);
+    }
+    lines.push('', '');
+
+    let buffer = Buffer.alloc(0);
+    let handshakeDone = false;
+    const messages = [];
+    const jsonEvents = [];
+
+    const timer = setTimeout(() => {
+      settleReject(new Error('ws_timeout'));
+    }, toMs);
+
+    function tryDrainFrames() {
+      while (true) {
+        const parsed = wsTryParseFrame(buffer);
+        if (!parsed) return;
+        if (parsed.error) {
+          settleReject(new Error(parsed.error));
+          return;
+        }
+        buffer = parsed.rest;
+        const frame = parsed.frame;
+
+        // opcode 0x1: text, 0x8: close, 0x9: ping
+        if (frame.opcode === 0x8) {
+          settleResolve({ messages, jsonEvents });
+          return;
+        }
+        if (frame.opcode === 0x9) {
+          // ping -> pong
+          try { socket.write(wsEncodeClientPongFrame(frame.payload)); } catch (e) {}
+          continue;
+        }
+        if (frame.opcode === 0x1) {
+          const txt = frame.payload.toString('utf8');
+          messages.push(txt);
+          try {
+            const j = JSON.parse(txt);
+            jsonEvents.push(j);
+            if (stopWhen && stopWhen(j, jsonEvents)) {
+              // Close politely
+              try { socket.write(wsEncodeClientCloseFrame()); } catch (e) {}
+              settleResolve({ messages, jsonEvents });
+              return;
+            }
+          } catch (e) {
+            // ignore non-json message
+          }
+        }
+      }
+    }
+
+    socket.on('error', (err) => {
+      if (settled) return;
+      settleReject(err);
+    });
+
+    socket.on('connect', () => {
+      try { socket.write(lines.join('\r\n')); } catch (e) {
+        settleReject(e);
+      }
+    });
+
+    socket.on('data', (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+
+      if (!handshakeDone) {
+        const sep = buffer.indexOf('\r\n\r\n');
+        if (sep === -1) return;
+
+        const headerText = buffer.slice(0, sep).toString('utf8');
+        const rest = buffer.slice(sep + 4);
+        buffer = rest;
+
+        const headerLines = headerText.split('\r\n');
+        const statusLine = headerLines.shift() || '';
+        const m = statusLine.match(/HTTP\/1\.1\s+(\d+)/i);
+        const statusCode = m ? Number(m[1]) : 0;
+
+        const h = {};
+        for (const ln of headerLines) {
+          const idx = ln.indexOf(':');
+          if (idx === -1) continue;
+          const k = ln.slice(0, idx).trim().toLowerCase();
+          const v = ln.slice(idx + 1).trim();
+          h[k] = v;
+        }
+
+        const expectedAccept = wsBuildAcceptValue(key);
+        const gotAccept = h['sec-websocket-accept'];
+        if (statusCode !== 101 || gotAccept !== expectedAccept) {
+          settleReject(new Error(`ws_handshake_failed status=${statusCode} accept_ok=${gotAccept === expectedAccept}`));
+          return;
+        }
+
+        handshakeDone = true;
+
+        // Send client message after successful handshake
+        try {
+          const frame = wsEncodeClientTextFrame(JSON.stringify(sendObj || {}));
+          socket.write(frame);
+        } catch (e) {
+          settleReject(e);
+          return;
+        }
+
+        // Continue draining any buffered WS frames in the same packet
+        tryDrainFrames();
+        return;
+      }
+
+      // Post-handshake frames
+      tryDrainFrames();
+    });
+  });
+}
+
+async function startMockLLMServer() {
+  const port = await findFreePort();
+
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
+    if (String(req.method || '').toUpperCase() !== 'POST' || !u.pathname.endsWith('/chat/completions')) {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not_found' }));
+      return;
+    }
+
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const txt = Buffer.concat(chunks).toString('utf8');
+    let payload = {};
+    try { payload = txt ? JSON.parse(txt) : {}; } catch (e) {}
+
+    const messages = Array.isArray(payload.messages) ? payload.messages : [];
+    const lastUser = [...messages].reverse().find(m => m && m.role === 'user' && typeof m.content === 'string');
+    const lastUserText = lastUser ? lastUser.content : '';
+
+    // Debug hook (verify harness): if user content contains "__debug_messages__",
+    // respond with a JSON string describing the message list so we can validate
+    // conversation buffering/summary behavior deterministically without a real model.
+    const wantsDebug = String(lastUserText || '').includes('__debug_messages__');
+
+    let replyText = '';
+    if (wantsDebug) {
+      const roles = messages.map(m => (m && m.role) ? String(m.role) : '');
+      const hasSummary = messages.some(m =>
+        m && m.role === 'developer' && typeof m.content === 'string' && m.content.includes('Conversation summary:')
+      );
+      replyText = JSON.stringify({
+        messages_count: messages.length,
+        roles,
+        has_summary: hasSummary
+      });
+    } else {
+      replyText = `MOCK_RESPONSE: ${lastUserText}`.trim();
+    }
+
+    // Non-streaming response
+    if (!payload.stream) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        id: 'mock_chatcmpl',
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model: payload.model || 'mock',
+        choices: [
+          { index: 0, message: { role: 'assistant', content: replyText }, finish_reason: 'stop' }
+        ]
+      }));
+      return;
+    }
+
+    // Streaming (SSE-style) response (best-effort)
+    res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive'
+    });
+
+    const parts = replyText.split(/(\s+)/).filter(Boolean);
+    for (const p of parts) {
+      const chunk = { choices: [{ delta: { content: p } }] };
+      res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      await sleep(5);
+    }
+    res.write('data: [DONE]\n\n');
+    res.end();
+  });
+
+  await new Promise((resolve, reject) => {
+    server.on('error', reject);
+    server.listen(port, '127.0.0.1', () => resolve());
+  });
+
+  return {
+    port,
+    baseUrl: `http://127.0.0.1:${port}/v1`,
+    close: () => new Promise((resolve) => server.close(() => resolve()))
+  };
+}
+
+async function startAgentHttpServer({ agentDir, env, basePath }) {
+  const child = spawn(process.execPath, ['src/adapters/http/server.js'], {
+    cwd: agentDir,
+    env: Object.assign({}, process.env, env || {}),
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  const logs = { stdout: '', stderr: '' };
+  child.stdout.on('data', (d) => { logs.stdout += String(d); });
+  child.stderr.on('data', (d) => { logs.stderr += String(d); });
+
+  // Wait until health responds (poll)
+  const port = Number(env && env.PORT);
+  const bp = String(basePath || '');
+  const healthPath = `${bp}/health`;
+
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      const r = await httpJson({ method: 'GET', port, path: healthPath, timeoutMs: 1000 });
+      if (r.statusCode === 200) return { child, logs };
+    } catch (e) {}
+    await sleep(50);
   }
-  return out;
+
+  try { child.kill('SIGKILL'); } catch (e) {}
+  throw new Error(`Agent server did not become healthy within timeout. stdout=${logs.stdout} stderr=${logs.stderr}`);
 }
 
-function ensureDir(p, apply) {
-  if (!apply) return { ok: true, action: 'mkdir', path: p, applied: false };
-  fs.mkdirSync(p, { recursive: true });
-  return { ok: true, action: 'mkdir', path: p, applied: true };
-}
-
-function readText(p) {
-  return fs.readFileSync(p, 'utf8');
-}
-
-function writeText(p, content, apply, overwrite = false) {
-  if (fs.existsSync(p) && !overwrite) {
-    return { ok: true, action: 'skip', path: p, reason: 'exists' };
+async function stopProcess(child) {
+  if (!child) return;
+  try {
+    child.kill('SIGTERM');
+  } catch (e) {}
+  const waited = await Promise.race([
+    new Promise(resolve => child.once('exit', () => resolve(true))),
+    sleep(500).then(() => false)
+  ]);
+  if (!waited) {
+    try { child.kill('SIGKILL'); } catch (e) {}
   }
-  if (!apply) {
-    return { ok: true, action: 'write', path: p, applied: false };
-  }
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, content, 'utf8');
-  return { ok: true, action: 'write', path: p, applied: true };
 }
 
-function readJson(p) {
-  return JSON.parse(fs.readFileSync(p, 'utf8'));
+function loadTemplatesRoot() {
+  // This script lives at .../scripts/agent-builder.js
+  // Templates live at .../templates/
+  return path.join(__dirname, '..', 'templates');
 }
 
-function writeJson(p, obj, apply, overwrite = false) {
-  return writeText(p, JSON.stringify(obj, null, 2) + '\n', apply, overwrite);
+function statePath(workdir) {
+  return path.join(workdir, '.agent-builder-state.json');
 }
 
 function loadState(workdir) {
-  const p = path.join(workdir, STATE_FILE);
-  if (!fs.existsSync(p)) return null;
+  const p = statePath(workdir);
+  if (!exists(p)) die(`State not found: ${p}`);
   return readJson(p);
 }
 
-function saveState(workdir, state, apply) {
-  const p = path.join(workdir, STATE_FILE);
-  writeJson(p, state, apply, true);
+function saveState(workdir, state) {
+  writeJson(statePath(workdir), state);
 }
 
-function recordEvent(state, event, details) {
+function addHistory(state, event, details) {
   state.history = state.history || [];
-  state.history.push({ timestamp: nowIso(), event, details: details || {} });
+  state.history.push({ timestamp: nowIso(), event, details });
 }
 
-function isSafeTempWorkdir(workdir) {
-  const normalized = path.resolve(workdir);
-  const base = path.resolve(path.join(os.tmpdir(), 'agent_builder'));
-  return normalized.startsWith(base + path.sep);
+function ensureWorkdir(workdir) {
+  if (!workdir) die('Missing --workdir (or set AGENT_BUILDER_WORKDIR).');
+  if (!exists(workdir)) die(`Workdir does not exist: ${workdir}`);
 }
 
-function removeDirRecursive(dir) {
-  fs.rmSync(dir, { recursive: true, force: true });
+function getWorkdir(args) {
+  return args.workdir || process.env.AGENT_BUILDER_WORKDIR || '';
 }
 
-function copyFile(src, dest, apply, replacements) {
-  const ext = path.extname(src).toLowerCase();
-  const isText = ['.md', '.txt', '.json', '.js', '.ts', '.yml', '.yaml', '.env', '.gitignore'].includes(ext) || src.endsWith('.template');
-  if (fs.existsSync(dest)) return { ok: true, action: 'skip', path: dest, reason: 'exists' };
-
-  if (!apply) return { ok: true, action: 'write', path: dest, applied: false };
-
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-
-  if (isText) {
-    let content = fs.readFileSync(src, 'utf8');
-    if (replacements) {
-      for (const [k, v] of Object.entries(replacements)) {
-        content = content.split(k).join(String(v));
-      }
-    }
-    // strip ".template" suffix on write if present in dest path already handled by caller
-    fs.writeFileSync(dest, content, 'utf8');
-  } else {
-    fs.copyFileSync(src, dest);
-  }
-  return { ok: true, action: 'write', path: dest, applied: true };
-}
-
-function walkFiles(dir) {
-  const out = [];
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-  for (const e of entries) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) out.push(...walkFiles(p));
-    else out.push(p);
-  }
-  return out;
-}
-
-function pickBlueprintPath(args, workdir, state) {
-  if (args.blueprint) return path.resolve(args.blueprint);
-  if (state && state.blueprint_path) return path.resolve(workdir, state.blueprint_path);
-  return path.join(workdir, 'stageB', 'agent-blueprint.json');
-}
-
-function schemaRefKey(ref) {
-  // "#/schemas/RunRequest" -> "RunRequest"
-  if (typeof ref !== 'string') return null;
-  const m = ref.match(/^#\/schemas\/([A-Za-z0-9_]+)$/);
-  return m ? m[1] : null;
-}
-
+/**
+ * Blueprint validation (manual, checklist-aligned).
+ * Returns { ok, errors[], warnings[] }.
+ */
 function validateBlueprint(blueprint) {
   const errors = [];
   const warnings = [];
 
   function req(cond, msg) { if (!cond) errors.push(msg); }
   function warn(cond, msg) { if (!cond) warnings.push(msg); }
-  const isObject = (val) => !!val && typeof val === 'object' && !Array.isArray(val);
-  const isNonEmptyString = (val) => typeof val === 'string' && val.trim().length > 0;
-  const isPositiveInt = (val) => Number.isInteger(val) && val > 0;
-  const isNonNegativeInt = (val) => Number.isInteger(val) && val >= 0;
-  const requireEnum = (val, allowed, label) => {
-    req(allowed.has(val), `${label} must be one of: ${Array.from(allowed).join(', ')}`);
-  };
-  const requireSchemaRef = (ref, label, schemas) => {
-    const key = schemaRefKey(ref);
-    req(!!key, `${label} must match "#/schemas/<Name>".`);
-    if (key) req(!!schemas[key], `${label} references missing schema: ${key}`);
-    return key;
-  };
 
-  req(isObject(blueprint), 'Blueprint must be a JSON object.');
-  if (!isObject(blueprint)) return { ok: false, errors, warnings };
+  if (!blueprint || typeof blueprint !== 'object') {
+    return { ok: false, errors: ['Blueprint must be a JSON object.'], warnings };
+  }
 
   req(blueprint.kind === 'agent_blueprint', 'kind must be "agent_blueprint".');
   req(Number.isInteger(blueprint.version) && blueprint.version >= 1, 'version must be an integer >= 1.');
 
-  const meta = blueprint.meta || {};
-  req(isObject(meta), 'meta is required (object).');
-  req(isNonEmptyString(meta.generated_at), 'meta.generated_at is required (string).');
-  if (isNonEmptyString(meta.generated_at)) {
-    req(!Number.isNaN(Date.parse(meta.generated_at)), 'meta.generated_at must be a valid date-time.');
-  }
+  const mustBlocks = [
+    'meta','agent','scope','integration','interfaces','api','schemas','contracts','model',
+    'configuration','conversation','budgets','data_flow','observability','security','acceptance','deliverables'
+  ];
+  for (const b of mustBlocks) req(blueprint[b] && typeof blueprint[b] === 'object', `Missing required block: ${b}`);
 
   const agent = blueprint.agent || {};
-  req(isObject(agent), 'agent is required (object).');
-  req(isNonEmptyString(agent.id), 'agent.id is required (string).');
-  req(isNonEmptyString(agent.name), 'agent.name is required (string).');
-  req(isNonEmptyString(agent.summary), 'agent.summary is required (string).');
-  req(Array.isArray(agent.owners) && agent.owners.length > 0, 'agent.owners is required (non-empty array).');
-  const ownerTypes = new Set(['person','team','service']);
-  if (Array.isArray(agent.owners)) {
-    agent.owners.forEach((owner, idx) => {
-      if (!isObject(owner)) {
-        errors.push(`agent.owners[${idx}] must be an object.`);
-        return;
-      }
-      requireEnum(owner.type, ownerTypes, `agent.owners[${idx}].type`);
-      req(isNonEmptyString(owner.id), `agent.owners[${idx}].id is required (string).`);
-      if (owner.contact !== undefined) {
-        req(isNonEmptyString(owner.contact), `agent.owners[${idx}].contact must be a non-empty string.`);
-      }
-    });
-  }
-
-  const scope = blueprint.scope || {};
-  req(isObject(scope), 'scope is required (object).');
-  req(Array.isArray(scope.in_scope) && scope.in_scope.length > 0, 'scope.in_scope is required (non-empty array).');
-  req(Array.isArray(scope.out_of_scope) && scope.out_of_scope.length > 0, 'scope.out_of_scope is required (non-empty array).');
-  req(isNonEmptyString(scope.definition_of_done), 'scope.definition_of_done is required (string).');
-  if (Array.isArray(scope.in_scope)) {
-    scope.in_scope.forEach((item, idx) => {
-      req(isNonEmptyString(item), `scope.in_scope[${idx}] must be a non-empty string.`);
-    });
-  }
-  if (Array.isArray(scope.out_of_scope)) {
-    scope.out_of_scope.forEach((item, idx) => {
-      req(isNonEmptyString(item), `scope.out_of_scope[${idx}] must be a non-empty string.`);
-    });
-  }
+  req(typeof agent.id === 'string' && agent.id.trim(), 'agent.id is required (string).');
+  req(typeof agent.name === 'string' && agent.name.trim(), 'agent.name is required (string).');
+  req(typeof agent.summary === 'string' && agent.summary.trim(), 'agent.summary is required (string).');
+  req(Array.isArray(agent.owners) && agent.owners.length > 0, 'agent.owners must be a non-empty array.');
 
   const integration = blueprint.integration || {};
-  req(isObject(integration), 'integration is required (object).');
-  req(integration.primary === 'api', 'integration.primary must be "api" in v1.');
-  req(Array.isArray(integration.attach), 'integration.attach is required (array).');
+  req(integration.primary === 'api', 'integration.primary must be "api" (v1).');
+
   const attach = Array.isArray(integration.attach) ? integration.attach : [];
   const allowedAttach = new Set(['worker','sdk','cron','pipeline']);
-  const attachSet = new Set();
-  for (const a of attach) {
-    if (!allowedAttach.has(a)) {
-      errors.push(`integration.attach contains unsupported value: ${a}`);
-      continue;
-    }
-    if (attachSet.has(a)) errors.push(`integration.attach contains duplicate value: ${a}`);
-    attachSet.add(a);
-  }
+  for (const a of attach) req(allowedAttach.has(a), `integration.attach contains unsupported value: ${a}`);
 
-  const trigger = integration.trigger || {};
-  req(isObject(trigger), 'integration.trigger is required (object).');
-  if (isObject(trigger)) {
-    const allowedTrigger = new Set(['sync_request','async_event','scheduled','manual','batch']);
-    requireEnum(trigger.kind, allowedTrigger, 'integration.trigger.kind');
-  }
+  const trig = integration.trigger || {};
+  req(['sync_request','async_event','scheduled','manual','batch'].includes(trig.kind), 'integration.trigger.kind is required and must be a known enum.');
 
-  const target = integration.target || {};
-  req(isObject(target), 'integration.target is required (object).');
-  if (isObject(target)) {
-    const allowedTarget = new Set(['service','repo_module','pipeline_step','queue','topic','job','function','other']);
-    requireEnum(target.kind, allowedTarget, 'integration.target.kind');
-    req(isNonEmptyString(target.name), 'integration.target.name is required (string).');
-  }
+  const tgt = integration.target || {};
+  req(typeof tgt.name === 'string' && tgt.name.trim(), 'integration.target.name is required (string).');
+  req(['service','repo_module','pipeline_step','queue','topic','job','function','other'].includes(tgt.kind), 'integration.target.kind must be a known enum.');
 
-  // failure contract
-  const failureContract = integration.failure_contract || {};
-  req(isObject(failureContract), 'integration.failure_contract is required (object).');
-  const failMode = failureContract?.mode;
-  const allowedFail = new Set(['propagate_error','return_fallback','enqueue_retry']);
-  req(allowedFail.has(failMode), `integration.failure_contract.mode must be one of: ${Array.from(allowedFail).join(', ')}`);
-  // explicit disallow (defense-in-depth)
-  req(failMode !== 'suppress_and_alert', 'integration.failure_contract.mode must not be "suppress_and_alert".');
+  const fail = integration.failure_contract || {};
+  req(['propagate_error','return_fallback','enqueue_retry'].includes(fail.mode), 'integration.failure_contract.mode must be a known enum.');
+  // Explicitly disallow suppression modes
+  req(fail.mode !== 'suppress_and_alert', 'integration.failure_contract.mode must not be suppress_and_alert.');
 
-  // rollback contract
   const rollback = integration.rollback_or_disable || {};
-  req(isObject(rollback), 'integration.rollback_or_disable is required (object).');
-  const rb = rollback?.method;
-  const allowedRb = new Set(['feature_flag','config_toggle','route_switch','deployment_rollback']);
-  req(allowedRb.has(rb), `integration.rollback_or_disable.method must be one of: ${Array.from(allowedRb).join(', ')}`);
+  req(['feature_flag','config_toggle','route_switch','deployment_rollback'].includes(rollback.method), 'integration.rollback_or_disable.method must be a known enum.');
 
-  // schemas
+  // API validation
+  const api = blueprint.api || {};
+  // v1 scaffold only supports HTTP.
+  req(['http'].includes(api.protocol), 'api.protocol must be http.');
+  req(typeof api.base_path === 'string' && api.base_path.startsWith('/'), 'api.base_path must be a non-empty path starting with "/".');
+  req(Number.isInteger(api.timeout_budget_ms) && api.timeout_budget_ms > 0, 'api.timeout_budget_ms must be a positive integer.');
+
+  const auth = api.auth || {};
+  req(['none','api_key','bearer_token','oauth2','mtls','internal_gateway'].includes(auth.kind), 'api.auth.kind must be a known enum.');
+  const degradation = api.degradation || {};
+  req(['none','return_fallback','return_unavailable','route_to_worker'].includes(degradation.mode), 'api.degradation.mode must be a known enum.');
+
+  // Routes must include run+health names and those names are fixed (no others in v1).
+  const routes = Array.isArray(api.routes) ? api.routes : [];
+  req(routes.length >= 2, 'api.routes must include at least run and health.');
+  const routeNames = new Set(routes.map(r => r && r.name));
+  req(routeNames.has('run'), 'api.routes must include name="run".');
+  req(routeNames.has('health'), 'api.routes must include name="health".');
+  for (const r of routes) {
+    if (!r) continue;
+    req(['run','health'].includes(r.name), `api.routes.name must be run|health (got ${r.name}).`);
+    req(typeof r.path === 'string' && r.path.startsWith('/'), `api.routes[].path must start with "/": ${r.name}`);
+    req(['get','post','put','patch','delete'].includes(String(r.method || '').toLowerCase()), `api.routes[].method invalid: ${r.name}`);
+    req(typeof r.request_schema_ref === 'string', `api.routes[].request_schema_ref required: ${r.name}`);
+    req(typeof r.response_schema_ref === 'string', `api.routes[].response_schema_ref required: ${r.name}`);
+    req(typeof r.error_schema_ref === 'string', `api.routes[].error_schema_ref required: ${r.name}`);
+  }
+
+  // Schemas must exist
   const schemas = blueprint.schemas || {};
-  req(isObject(schemas), 'schemas is required (object).');
-  req(isObject(schemas.RunRequest), 'schemas.RunRequest is required.');
-  req(isObject(schemas.RunResponse), 'schemas.RunResponse is required.');
-  req(isObject(schemas.AgentError), 'schemas.AgentError is required.');
+  req(!!schemas.RunRequest, 'schemas.RunRequest is required.');
+  req(!!schemas.RunResponse, 'schemas.RunResponse is required.');
+  req(!!schemas.AgentError, 'schemas.AgentError is required.');
 
-  // contract refs
-  requireSchemaRef(integration.upstream_contract_ref, 'integration.upstream_contract_ref', schemas);
-  requireSchemaRef(integration.downstream_contract_ref, 'integration.downstream_contract_ref', schemas);
+  // Contracts
+  const contracts = blueprint.contracts || {};
+  req(typeof contracts.version === 'string' && contracts.version.trim(), 'contracts.version is required (string).');
+  req(['strict','additive_only','backward_compatible'].includes(contracts.compatibility_policy), 'contracts.compatibility_policy must be a known enum.');
 
-  // interfaces
-  const interfaces = Array.isArray(blueprint.interfaces) ? blueprint.interfaces : [];
-  req(interfaces.length > 0, 'interfaces is required (non-empty array).');
-  const allowedInterfaces = new Set(['http','worker','sdk','cron','pipeline','cli']);
-  if (Array.isArray(interfaces)) {
-    interfaces.forEach((iface, idx) => {
-      if (!isObject(iface)) {
-        errors.push(`interfaces[${idx}] must be an object.`);
-        return;
-      }
-      requireEnum(iface.type, allowedInterfaces, `interfaces[${idx}].type`);
-      req(isNonEmptyString(iface.entrypoint), `interfaces[${idx}].entrypoint is required (string).`);
-      requireSchemaRef(iface.input_schema_ref, `interfaces[${idx}].input_schema_ref`, schemas);
-      requireSchemaRef(iface.output_schema_ref, `interfaces[${idx}].output_schema_ref`, schemas);
-      if (iface.error_schema_ref !== undefined) {
-        requireSchemaRef(iface.error_schema_ref, `interfaces[${idx}].error_schema_ref`, schemas);
-      }
-      req(isPositiveInt(iface.examples_min), `interfaces[${idx}].examples_min must be an integer >= 1.`);
-    });
+  // Model
+  const model = blueprint.model || {};
+  req(model.primary && typeof model.primary === 'object', 'model.primary is required.');
+  req(model.primary && model.primary.provider && typeof model.primary.provider.type === 'string', 'model.primary.provider.type is required.');
+  req(typeof model.primary.model === 'string' && model.primary.model.trim(), 'model.primary.model is required (string).');
+
+  // Configuration env vars
+  const cfg = blueprint.configuration || {};
+  const envVars = Array.isArray(cfg.env_vars) ? cfg.env_vars : [];
+  req(envVars.length > 0, 'configuration.env_vars must be a non-empty array.');
+  const envNames = new Set();
+  for (const ev of envVars) {
+    if (!ev) continue;
+    req(typeof ev.name === 'string' && ev.name.trim(), 'configuration.env_vars[].name is required.');
+    req(typeof ev.description === 'string' && ev.description.trim(), `configuration.env_vars[${ev.name}].description is required.`);
+    req(typeof ev.required === 'boolean', `configuration.env_vars[${ev.name}].required must be boolean.`);
+    req(['public','internal','secret'].includes(ev.sensitivity), `configuration.env_vars[${ev.name}].sensitivity must be public|internal|secret.`);
+    if (envNames.has(ev.name)) errors.push(`Duplicate env var name: ${ev.name}`);
+    envNames.add(ev.name);
   }
+  // Kill switch must be present and required
+  const kill = envVars.find(v => v && v.name === 'AGENT_ENABLED');
+  req(!!kill, 'configuration.env_vars must include AGENT_ENABLED.');
+  req(kill && kill.required === true, 'AGENT_ENABLED must be required=true.');
 
-  const hasType = (t) => interfaces.some((i) => i && i.type === t);
-  req(hasType('http'), 'interfaces must include type "http" when primary=api.');
-
-  for (const a of attach) {
-    req(hasType(a), `interfaces must include type "${a}" because it is included in integration.attach.`);
-  }
-
-  // api config
-  const api = blueprint.api || null;
-  req(isObject(api), 'api config block is required when primary=api.');
-  if (isObject(api)) {
-    const allowedProtocol = new Set(['http','grpc']);
-    requireEnum(api.protocol, allowedProtocol, 'api.protocol');
-    req(isNonEmptyString(api.base_path), 'api.base_path is required (string).');
-    req(isPositiveInt(api.timeout_budget_ms), 'api.timeout_budget_ms must be an integer >= 1.');
-    const routes = Array.isArray(api.routes) ? api.routes : [];
-    req(Array.isArray(api.routes) && api.routes.length >= 2, 'api.routes must be an array with at least 2 routes.');
-    const routeNames = new Set(routes.map((r) => r?.name).filter(Boolean));
-    req(routeNames.has('run'), 'api.routes must include name="run".');
-    req(routeNames.has('health'), 'api.routes must include name="health".');
-
-    const allowedMethods = new Set(['get','post','put','patch','delete']);
-    routes.forEach((route, idx) => {
-      if (!isObject(route)) {
-        errors.push(`api.routes[${idx}] must be an object.`);
-        return;
-      }
-      requireEnum(route.name, new Set(['run','health']), `api.routes[${idx}].name`);
-      requireEnum(route.method, allowedMethods, `api.routes[${idx}].method`);
-      req(isNonEmptyString(route.path), `api.routes[${idx}].path is required (string).`);
-      requireSchemaRef(route.request_schema_ref, `api.routes[${idx}].request_schema_ref`, schemas);
-      requireSchemaRef(route.response_schema_ref, `api.routes[${idx}].response_schema_ref`, schemas);
-      if (route.error_schema_ref !== undefined) {
-        requireSchemaRef(route.error_schema_ref, `api.routes[${idx}].error_schema_ref`, schemas);
-      }
-    });
-
-    const auth = api.auth || {};
-    req(isObject(auth), 'api.auth is required (object).');
-    if (isObject(auth)) {
-      const allowedAuth = new Set(['none','api_key','bearer_token','oauth2','mtls','internal_gateway']);
-      requireEnum(auth.kind, allowedAuth, 'api.auth.kind');
-      if (auth.env_var !== undefined) {
-        req(isNonEmptyString(auth.env_var), 'api.auth.env_var must be a non-empty string.');
-      }
-    }
-
-    const degradation = api.degradation || {};
-    req(isObject(degradation), 'api.degradation is required (object).');
-    if (isObject(degradation)) {
-      const allowedDegradation = new Set(['none','return_fallback','return_unavailable','route_to_worker']);
-      requireEnum(degradation.mode, allowedDegradation, 'api.degradation.mode');
-    }
-  }
-
-  // optional blocks required by attach
-  if (attach.includes('worker')) {
-    const worker = blueprint.worker || {};
-    req(isObject(worker), 'worker block is required because attach includes "worker".');
-    if (isObject(worker)) {
-      const source = worker.source || {};
-      req(isObject(source), 'worker.source is required (object).');
-      if (isObject(source)) {
-        const allowedSource = new Set(['queue','topic','task_table','cron','webhook']);
-        requireEnum(source.kind, allowedSource, 'worker.source.kind');
-        req(isNonEmptyString(source.name), 'worker.source.name is required (string).');
-      }
-
-      const execution = worker.execution || {};
-      req(isObject(execution), 'worker.execution is required (object).');
-      if (isObject(execution)) {
-        req(isPositiveInt(execution.max_concurrency), 'worker.execution.max_concurrency must be an integer >= 1.');
-        req(isPositiveInt(execution.timeout_ms), 'worker.execution.timeout_ms must be an integer >= 1.');
-      }
-
-      const retry = worker.retry || {};
-      req(isObject(retry), 'worker.retry is required (object).');
-      if (isObject(retry)) {
-        req(isPositiveInt(retry.max_attempts), 'worker.retry.max_attempts must be an integer >= 1.');
-        const backoff = retry.backoff || {};
-        req(isObject(backoff), 'worker.retry.backoff is required (object).');
-        if (isObject(backoff)) {
-          const allowedBackoff = new Set(['fixed','exponential','exponential_jitter']);
-          requireEnum(backoff.strategy, allowedBackoff, 'worker.retry.backoff.strategy');
-          if (backoff.base_delay_ms !== undefined) {
-            req(isNonNegativeInt(backoff.base_delay_ms), 'worker.retry.backoff.base_delay_ms must be an integer >= 0.');
-          }
-        }
-      }
-
-      const idempotency = worker.idempotency || {};
-      req(isObject(idempotency), 'worker.idempotency is required (object).');
-      if (isObject(idempotency)) {
-        const allowedId = new Set(['none','header','payload_field','hash_payload','external_key']);
-        requireEnum(idempotency.strategy, allowedId, 'worker.idempotency.strategy');
-      }
-
-      const failure = worker.failure || {};
-      req(isObject(failure), 'worker.failure is required (object).');
-      if (isObject(failure)) {
-        const deadLetter = failure.dead_letter || {};
-        req(isObject(deadLetter), 'worker.failure.dead_letter is required (object).');
-        if (isObject(deadLetter)) {
-          const allowedDeadLetter = new Set(['none','queue','topic','table']);
-          requireEnum(deadLetter.kind, allowedDeadLetter, 'worker.failure.dead_letter.kind');
-        }
-        const allowedAlertOn = new Set(['always','after_retries','never']);
-        requireEnum(failure.alert_on, allowedAlertOn, 'worker.failure.alert_on');
+  // Conversation
+  const conv = blueprint.conversation || {};
+  req(['no-need','buffer','buffer_window','summary','summary_buffer'].includes(conv.mode), 'conversation.mode must be a known enum.');
+  if (conv.mode !== 'no-need') {
+    warn(typeof conv.scope === 'string', 'conversation.scope is recommended when conversation.mode != no-need.');
+    warn(conv.storage && typeof conv.storage.kind === 'string', 'conversation.storage.kind is recommended when conversation.mode != no-need.');
+    if (conv.storage && typeof conv.storage.kind === 'string') {
+      warn(['none','in_memory','file','kv_store','database'].includes(conv.storage.kind), 'conversation.storage.kind must be a known enum when provided.');
+      // NOTE: The scaffold runtime implements none/in_memory/file only.
+      if (['kv_store','database'].includes(conv.storage.kind)) {
+        warnings.push(`[STAGE_D_REQUIRED] conversation.storage.kind="${conv.storage.kind}" is not implemented in the scaffold. You MUST implement a custom store adapter in Stage D (see reference/stage_d_implementation_guide.md). Consider using "in_memory" or "file" for prototyping.`);
       }
     }
   }
-
-  if (attach.includes('sdk')) {
-    const sdk = blueprint.sdk || {};
-    req(isObject(sdk), 'sdk block is required because attach includes "sdk".');
-    if (isObject(sdk)) {
-      const allowedLang = new Set(['typescript','python','go','java','dotnet']);
-      requireEnum(sdk.language, allowedLang, 'sdk.language');
-      const pkg = sdk.package || {};
-      req(isObject(pkg), 'sdk.package is required (object).');
-      if (isObject(pkg)) {
-        req(isNonEmptyString(pkg.name), 'sdk.package.name is required (string).');
-        req(isNonEmptyString(pkg.version), 'sdk.package.version is required (string).');
-      }
-      req(Array.isArray(sdk.exports) && sdk.exports.length > 0, 'sdk.exports must be a non-empty array.');
-      if (Array.isArray(sdk.exports)) {
-        sdk.exports.forEach((ex, idx) => {
-          if (!isObject(ex)) {
-            errors.push(`sdk.exports[${idx}] must be an object.`);
-            return;
-          }
-          req(isNonEmptyString(ex.name), `sdk.exports[${idx}].name is required (string).`);
-          requireSchemaRef(ex.input_schema_ref, `sdk.exports[${idx}].input_schema_ref`, schemas);
-          requireSchemaRef(ex.output_schema_ref, `sdk.exports[${idx}].output_schema_ref`, schemas);
-          if (ex.error_schema_ref !== undefined) {
-            requireSchemaRef(ex.error_schema_ref, `sdk.exports[${idx}].error_schema_ref`, schemas);
-          }
-        });
-      }
-      const compat = sdk.compatibility || {};
-      req(isObject(compat), 'sdk.compatibility is required (object).');
-      if (isObject(compat)) {
-        const allowedSemver = new Set(['strict','relaxed']);
-        requireEnum(compat.semver, allowedSemver, 'sdk.compatibility.semver');
-        req(isNonEmptyString(compat.breaking_change_policy), 'sdk.compatibility.breaking_change_policy is required (string).');
-      }
+  if (['summary','summary_buffer'].includes(conv.mode)) {
+    const s = conv.summary || {};
+    req(['llm','heuristic'].includes(s.update_method || 'llm'), 'conversation.summary.update_method must be llm|heuristic.');
+    req(['every_turn','threshold','periodic'].includes(s.refresh_policy || 'threshold'), 'conversation.summary.refresh_policy must be every_turn|threshold|periodic.');
+    req(['after_turn','async_post_turn'].includes(s.update_timing || 'after_turn'), 'conversation.summary.update_timing must be after_turn|async_post_turn.');
+    if ((s.refresh_policy || 'threshold') === 'threshold') {
+      const thr = s.threshold || {};
+      const hasToken = Number.isInteger(thr.max_tokens_since_update) && thr.max_tokens_since_update > 0;
+      const hasTurns = Number.isInteger(thr.max_turns_since_update) && thr.max_turns_since_update > 0;
+      req(hasToken || hasTurns, 'conversation.summary.threshold must set max_tokens_since_update and/or max_turns_since_update when refresh_policy=threshold.');
+      warn(hasToken, 'Token-first default: set conversation.summary.threshold.max_tokens_since_update (recommended).');
+    }
+    if (conv.mode === 'summary_buffer') {
+      const sb = conv.summary_buffer || {};
+      req((Number.isInteger(sb.window_turns) && sb.window_turns > 0) || (Number.isInteger(sb.window_tokens) && sb.window_tokens > 0),
+        'conversation.summary_buffer must set window_turns and/or window_tokens.');
     }
   }
 
-  if (attach.includes('cron')) {
-    const cron = blueprint.cron || {};
-    req(isObject(cron), 'cron block is required because attach includes "cron".');
-    if (isObject(cron)) {
-      req(isNonEmptyString(cron.schedule), 'cron.schedule is required (string).');
-      req(isNonEmptyString(cron.timezone), 'cron.timezone is required (string).');
-      const input = cron.input || {};
-      req(isObject(input), 'cron.input is required (object).');
-      if (isObject(input)) {
-        const allowedInput = new Set(['static_json','file','generate']);
-        requireEnum(input.mode, allowedInput, 'cron.input.mode');
-      }
-      const output = cron.output || {};
-      req(isObject(output), 'cron.output is required (object).');
-      if (isObject(output)) {
-        const allowedOutput = new Set(['stdout','file','http_callback']);
-        requireEnum(output.mode, allowedOutput, 'cron.output.mode');
-      }
-    }
+  // Budgets
+  const budgets = blueprint.budgets || {};
+  req(budgets.latency_ms && typeof budgets.latency_ms === 'object', 'budgets.latency_ms is required.');
+  req(budgets.throughput && typeof budgets.throughput === 'object', 'budgets.throughput is required.');
+
+  // Data flow
+  const df = blueprint.data_flow || {};
+  req(Array.isArray(df.data_classes) && df.data_classes.length > 0, 'data_flow.data_classes must be a non-empty array.');
+  req(df.llm_egress && typeof df.llm_egress.what_is_sent === 'string' && df.llm_egress.what_is_sent.trim(), 'data_flow.llm_egress.what_is_sent is required (string).');
+
+  // Observability
+  const obs = blueprint.observability || {};
+  const logs = obs.logs || {};
+  req(Array.isArray(logs.required_fields) && logs.required_fields.length > 0, 'observability.logs.required_fields must be a non-empty array.');
+
+  // Security
+  const sec = blueprint.security || {};
+  req(['read_only_only','writes_require_approval','writes_allowed'].includes(sec.side_effect_policy), 'security.side_effect_policy must be a known enum.');
+
+  // Tools (schema refs validated later)
+  const tools = (blueprint.tools && Array.isArray(blueprint.tools.tools)) ? blueprint.tools.tools : [];
+
+  // Acceptance scenarios
+  const acc = blueprint.acceptance || {};
+  const scenarios = Array.isArray(acc.scenarios) ? acc.scenarios : [];
+  req(scenarios.length >= 2, 'acceptance.scenarios must have at least 2 scenarios.');
+  for (const s of scenarios) {
+    if (!s) continue;
+    req(typeof s.title === 'string' && s.title.trim(), 'acceptance.scenarios[].title is required.');
+    req(['P0','P1','P2'].includes(s.priority), 'acceptance.scenarios[].priority must be P0|P1|P2.');
   }
 
-  if (attach.includes('pipeline')) {
-    const pipeline = blueprint.pipeline || {};
-    req(isObject(pipeline), 'pipeline block is required because attach includes "pipeline".');
-    if (isObject(pipeline)) {
-      const allowedKind = new Set(['ci','data_pipeline','etl','other']);
-      requireEnum(pipeline.kind, allowedKind, 'pipeline.kind');
-      const io = pipeline.io || {};
-      req(isObject(io), 'pipeline.io is required (object).');
-      if (isObject(io)) {
-        const allowedInput = new Set(['stdin_json','file_json']);
-        const allowedOutput = new Set(['stdout_json','file_json']);
-        requireEnum(io.input_mode, allowedInput, 'pipeline.io.input_mode');
-        requireEnum(io.output_mode, allowedOutput, 'pipeline.io.output_mode');
-      }
-    }
-  }
-
-  // deliverables
+  // Deliverables
   const del = blueprint.deliverables || {};
-  req(isObject(del), 'deliverables is required (object).');
-  req(isNonEmptyString(del.agent_module_path), 'deliverables.agent_module_path is required (string).');
-  req(isNonEmptyString(del.docs_path), 'deliverables.docs_path is required (string).');
-  req(isNonEmptyString(del.registry_path), 'deliverables.registry_path is required (string).');
+  req(typeof del.agent_module_path === 'string' && del.agent_module_path.trim(), 'deliverables.agent_module_path is required (string).');
+  req(typeof del.docs_path === 'string' && del.docs_path.trim(), 'deliverables.docs_path is required (string).');
+  req(typeof del.registry_path === 'string' && del.registry_path.trim(), 'deliverables.registry_path is required (string).');
   req(del.core_adapter_separation === 'required', 'deliverables.core_adapter_separation must be "required".');
 
-  // acceptance
-  const acc = blueprint.acceptance || {};
-  req(Array.isArray(acc.scenarios) && acc.scenarios.length >= 2, 'acceptance.scenarios must be an array with at least 2 scenarios.');
-  if (Array.isArray(acc.scenarios)) {
-    const allowedPriority = new Set(['P0','P1','P2']);
-    acc.scenarios.forEach((scenario, idx) => {
-      if (!isObject(scenario)) {
-        errors.push(`acceptance.scenarios[${idx}] must be an object.`);
-        return;
-      }
-      req(isNonEmptyString(scenario.title), `acceptance.scenarios[${idx}].title is required (string).`);
-      req(isNonEmptyString(scenario.given), `acceptance.scenarios[${idx}].given is required (string).`);
-      req(isNonEmptyString(scenario.when), `acceptance.scenarios[${idx}].when is required (string).`);
-      req(isNonEmptyString(scenario.then), `acceptance.scenarios[${idx}].then is required (string).`);
-      req(Array.isArray(scenario.expected_output_checks) && scenario.expected_output_checks.length > 0, `acceptance.scenarios[${idx}].expected_output_checks must be a non-empty array.`);
-      if (Array.isArray(scenario.expected_output_checks)) {
-        scenario.expected_output_checks.forEach((check, cIdx) => {
-          req(isNonEmptyString(check), `acceptance.scenarios[${idx}].expected_output_checks[${cIdx}] must be a non-empty string.`);
-        });
-      }
-      requireEnum(scenario.priority, allowedPriority, `acceptance.scenarios[${idx}].priority`);
-    });
-  }
+  // Attachment blocks required if enabled
+  function hasAttach(x) { return attach.includes(x); }
+  if (hasAttach('worker')) req(blueprint.worker && typeof blueprint.worker === 'object', 'worker block required when attach includes worker.');
+  if (hasAttach('sdk')) req(blueprint.sdk && typeof blueprint.sdk === 'object', 'sdk block required when attach includes sdk.');
+  if (hasAttach('cron')) req(blueprint.cron && typeof blueprint.cron === 'object', 'cron block required when attach includes cron.');
+  if (hasAttach('pipeline')) req(blueprint.pipeline && typeof blueprint.pipeline === 'object', 'pipeline block required when attach includes pipeline.');
 
-  // model
-  const model = blueprint.model || {};
-  req(isObject(model), 'model is required (object).');
-  req(isObject(model.primary), 'model.primary is required (object).');
-  if (isObject(model.primary)) {
-    req(isNonEmptyString(model.primary.model), 'model.primary.model is required (string).');
-    req(isNonEmptyString(model.primary.reasoning_profile), 'model.primary.reasoning_profile is required (string).');
-    if (model.primary.provider !== undefined) {
-      req(isObject(model.primary.provider), 'model.primary.provider must be an object when provided.');
-      if (isObject(model.primary.provider)) {
-        const allowedProvider = new Set(['openai','openai_compatible','azure_openai','internal_gateway','local']);
-        requireEnum(model.primary.provider.type, allowedProvider, 'model.primary.provider.type');
-      }
+  // Interfaces must include http and each attachment type.
+  const ifaces = Array.isArray(blueprint.interfaces) ? blueprint.interfaces : [];
+  const ifaceTypes = new Set(ifaces.map(i => i && i.type));
+  req(ifaceTypes.has('http'), 'interfaces must include a type="http" interface.');
+  for (const a of attach) req(ifaceTypes.has(a), `interfaces must include a type="${a}" interface because attach includes ${a}.`);
+
+  // Streaming defaults and requirements
+  for (const i of ifaces) {
+    if (!i) continue;
+    req(['http','worker','sdk','cron','pipeline','cli'].includes(i.type), `interfaces[].type invalid: ${i.type}`);
+    req(['blocking','streaming','async'].includes(i.response_mode), `interfaces[${i.type}].response_mode invalid.`);
+    req(['none','progress','debug'].includes(i.exposure_level), `interfaces[${i.type}].exposure_level invalid.`);
+    if (i.type === 'http' && i.response_mode === 'streaming') {
+      const protocol = i.streaming && i.streaming.protocol ? i.streaming.protocol : 'websocket';
+      req(['websocket','sse','chunked_jsonl'].includes(protocol), 'interfaces[http].streaming.protocol must be websocket|sse|chunked_jsonl.');
+      warn(!!(i.streaming && i.streaming.event_schema_ref), 'interfaces[http].streaming.event_schema_ref is recommended.');
+      // If streaming, RunEvent schema should exist
+      req(!!schemas.RunEvent, 'schemas.RunEvent is required when http interface is streaming.');
     }
   }
 
-  // config env vars
-  const cfg = blueprint.configuration || {};
-  const envs = Array.isArray(cfg.env_vars) ? cfg.env_vars : [];
-  req(isObject(cfg), 'configuration is required (object).');
-  req(envs.length > 0, 'configuration.env_vars must be a non-empty array.');
-  const envPattern = /^[A-Z][A-Z0-9_]*$/;
-  const allowedSensitivity = new Set(['public','internal','secret']);
-  const seenEnv = new Set();
-  if (Array.isArray(envs)) {
-    envs.forEach((env, idx) => {
-      if (!isObject(env)) {
-        errors.push(`configuration.env_vars[${idx}] must be an object.`);
-        return;
-      }
-      req(isNonEmptyString(env.name) && envPattern.test(env.name), `configuration.env_vars[${idx}].name must match ${envPattern}.`);
-      req(isNonEmptyString(env.description), `configuration.env_vars[${idx}].description is required (string).`);
-      req(typeof env.required === 'boolean', `configuration.env_vars[${idx}].required must be boolean.`);
-      requireEnum(env.sensitivity, allowedSensitivity, `configuration.env_vars[${idx}].sensitivity`);
-      req(isNonEmptyString(env.example_placeholder), `configuration.env_vars[${idx}].example_placeholder is required (string).`);
-      if (env.name) {
-        if (seenEnv.has(env.name)) errors.push(`configuration.env_vars has duplicate name: ${env.name}`);
-        seenEnv.add(env.name);
-      }
-    });
+  // Schema refs must resolve
+  const refs = [];
+  function pushRef(r) { if (typeof r === 'string' && r.startsWith('#/schemas/')) refs.push(r); }
+  for (const i of ifaces) {
+    if (!i) continue;
+    pushRef(i.request_schema_ref); pushRef(i.response_schema_ref); pushRef(i.error_schema_ref);
+    if (i.streaming) pushRef(i.streaming.event_schema_ref);
   }
-  req(envs.some(e => e?.name === 'AGENT_ENABLED'), 'configuration.env_vars must include AGENT_ENABLED for the kill switch.');
-  warn(envs.some(e => e?.name === 'LLM_API_KEY'), 'Recommended env var LLM_API_KEY not present.');
-  warn(envs.some(e => e?.name === 'LLM_MODEL'), 'Recommended env var LLM_MODEL not present.');
+  for (const r of routes) {
+    if (!r) continue;
+    pushRef(r.request_schema_ref); pushRef(r.response_schema_ref); pushRef(r.error_schema_ref);
+  }
+  for (const t of tools) {
+    if (!t) continue;
+    pushRef(t.input_schema_ref); pushRef(t.output_schema_ref); pushRef(t.error_schema_ref);
+  }
+  const missing = [];
+  for (const r of refs) {
+    const name = r.replace('#/schemas/', '');
+    if (!(name in schemas)) missing.push(r);
+  }
+  for (const m of missing) errors.push(`Schema ref does not resolve: ${m}`);
 
-  if (cfg.config_files !== undefined) {
-    req(Array.isArray(cfg.config_files), 'configuration.config_files must be an array when provided.');
-    if (Array.isArray(cfg.config_files)) {
-      cfg.config_files.forEach((file, idx) => {
-        if (!isObject(file)) {
-          errors.push(`configuration.config_files[${idx}] must be an object.`);
-          return;
-        }
-        req(isNonEmptyString(file.path), `configuration.config_files[${idx}].path is required (string).`);
-        req(isNonEmptyString(file.purpose), `configuration.config_files[${idx}].purpose is required (string).`);
-      });
-    }
-  }
-
-  const toolsBlock = blueprint.tools;
-  if (toolsBlock !== undefined) {
-    req(isObject(toolsBlock), 'tools must be an object when provided.');
-    const toolList = Array.isArray(toolsBlock?.tools) ? toolsBlock.tools : null;
-    if (toolsBlock && toolsBlock.tools !== undefined) {
-      req(Array.isArray(toolsBlock.tools), 'tools.tools must be an array when provided.');
-    }
-    if (Array.isArray(toolList)) {
-      toolList.forEach((tool, idx) => {
-        if (!isObject(tool)) {
-          errors.push(`tools.tools[${idx}] must be an object.`);
-          return;
-        }
-        req(isNonEmptyString(tool.name), `tools.tools[${idx}].name is required (string).`);
-        req(isNonEmptyString(tool.description), `tools.tools[${idx}].description is required (string).`);
-        if (tool.input_schema_ref !== undefined) {
-          requireSchemaRef(tool.input_schema_ref, `tools.tools[${idx}].input_schema_ref`, schemas);
-        }
-        if (tool.output_schema_ref !== undefined) {
-          requireSchemaRef(tool.output_schema_ref, `tools.tools[${idx}].output_schema_ref`, schemas);
-        }
-        if (tool.timeout_ms !== undefined) {
-          req(isPositiveInt(tool.timeout_ms), `tools.tools[${idx}].timeout_ms must be an integer >= 1.`);
-        }
-        if (tool.retries !== undefined) {
-          req(isNonNegativeInt(tool.retries), `tools.tools[${idx}].retries must be an integer >= 0.`);
-        }
-      });
-    }
-  }
-
-  const dataFlow = blueprint.data_flow;
-  if (dataFlow !== undefined) {
-    req(isObject(dataFlow), 'data_flow must be an object when provided.');
-    if (isObject(dataFlow)) {
-      if (dataFlow.data_classes !== undefined) {
-        req(Array.isArray(dataFlow.data_classes), 'data_flow.data_classes must be an array when provided.');
-        if (Array.isArray(dataFlow.data_classes)) {
-          dataFlow.data_classes.forEach((entry, idx) => {
-            req(isNonEmptyString(entry), `data_flow.data_classes[${idx}] must be a non-empty string.`);
-          });
-        }
-      }
-      if (dataFlow.retention !== undefined) req(isNonEmptyString(dataFlow.retention), 'data_flow.retention must be a non-empty string.');
-      if (dataFlow.redaction !== undefined) req(isNonEmptyString(dataFlow.redaction), 'data_flow.redaction must be a non-empty string.');
-      if (dataFlow.storage !== undefined) req(isNonEmptyString(dataFlow.storage), 'data_flow.storage must be a non-empty string.');
-      if (dataFlow.diagram_mermaid !== undefined) req(isNonEmptyString(dataFlow.diagram_mermaid), 'data_flow.diagram_mermaid must be a non-empty string.');
-    }
-  }
-
-  const observability = blueprint.observability;
-  if (observability !== undefined) {
-    req(isObject(observability), 'observability must be an object when provided.');
-    if (isObject(observability)) {
-      if (observability.logging !== undefined) req(isNonEmptyString(observability.logging), 'observability.logging must be a non-empty string.');
-      if (observability.metrics !== undefined) req(isNonEmptyString(observability.metrics), 'observability.metrics must be a non-empty string.');
-      if (observability.tracing !== undefined) req(isNonEmptyString(observability.tracing), 'observability.tracing must be a non-empty string.');
-      if (observability.alerts !== undefined) req(isNonEmptyString(observability.alerts), 'observability.alerts must be a non-empty string.');
-    }
-  }
-
-  const operations = blueprint.operations;
-  if (operations !== undefined) {
-    req(isObject(operations), 'operations must be an object when provided.');
-    if (isObject(operations)) {
-      if (operations.runbook_notes !== undefined) req(isNonEmptyString(operations.runbook_notes), 'operations.runbook_notes must be a non-empty string.');
-      if (operations.slo_sla !== undefined) req(isNonEmptyString(operations.slo_sla), 'operations.slo_sla must be a non-empty string.');
-      if (operations.oncall !== undefined) req(isNonEmptyString(operations.oncall), 'operations.oncall must be a non-empty string.');
-    }
-  }
-
-  const prompting = blueprint.prompting;
-  if (prompting !== undefined) {
-    req(isObject(prompting), 'prompting must be an object when provided.');
-    if (isObject(prompting)) {
-      if (prompting.complexity_tier !== undefined) {
-        const allowedTier = new Set(['tier1','tier2','tier3']);
-        requireEnum(prompting.complexity_tier, allowedTier, 'prompting.complexity_tier');
-      }
-      if (prompting.prompt_modules !== undefined) {
-        req(Array.isArray(prompting.prompt_modules), 'prompting.prompt_modules must be an array when provided.');
-        if (Array.isArray(prompting.prompt_modules)) {
-          prompting.prompt_modules.forEach((entry, idx) => {
-            req(isNonEmptyString(entry), `prompting.prompt_modules[${idx}] must be a non-empty string.`);
-          });
-        }
-      }
-      if (prompting.examples_strategy !== undefined) {
-        req(isNonEmptyString(prompting.examples_strategy), 'prompting.examples_strategy must be a non-empty string.');
-      }
-    }
-  }
-
-  const security = blueprint.security;
-  if (security !== undefined) {
-    req(isObject(security), 'security must be an object when provided.');
-    if (isObject(security)) {
-      if (security.approval_points !== undefined) {
-        req(Array.isArray(security.approval_points), 'security.approval_points must be an array when provided.');
-        if (Array.isArray(security.approval_points)) {
-          security.approval_points.forEach((entry, idx) => {
-            req(isNonEmptyString(entry), `security.approval_points[${idx}] must be a non-empty string.`);
-          });
-        }
-      }
-      if (security.permissions !== undefined) req(isNonEmptyString(security.permissions), 'security.permissions must be a non-empty string.');
-      if (security.threats !== undefined) req(isNonEmptyString(security.threats), 'security.threats must be a non-empty string.');
-    }
-  }
-
-  const lifecycle = blueprint.lifecycle;
-  if (lifecycle !== undefined) {
-    req(isObject(lifecycle), 'lifecycle must be an object when provided.');
-    if (isObject(lifecycle)) {
-      if (lifecycle.versioning !== undefined) req(isNonEmptyString(lifecycle.versioning), 'lifecycle.versioning must be a non-empty string.');
-      if (lifecycle.migration_notes !== undefined) req(isNonEmptyString(lifecycle.migration_notes), 'lifecycle.migration_notes must be a non-empty string.');
-      if (lifecycle.deprecation !== undefined) req(isNonEmptyString(lifecycle.deprecation), 'lifecycle.deprecation must be a non-empty string.');
-    }
-  }
-
-  if (del.non_goals !== undefined) {
-    req(Array.isArray(del.non_goals), 'deliverables.non_goals must be an array when provided.');
-    if (Array.isArray(del.non_goals)) {
-      del.non_goals.forEach((entry, idx) => {
-        req(isNonEmptyString(entry), `deliverables.non_goals[${idx}] must be a non-empty string.`);
-      });
-    }
-  }
+  // Warn if prompting tier missing
+  const prompting = blueprint.prompting || {};
+  warn(!!prompting.complexity_tier, 'prompting.complexity_tier is recommended (tier1|tier2|tier3).');
 
   return { ok: errors.length === 0, errors, warnings };
 }
 
-function printValidateResult(res, format) {
-  if (format === 'json') {
-    console.log(JSON.stringify(res, null, 2));
-    return;
-  }
-  if (res.ok) console.log('Blueprint: OK');
-  else console.log('Blueprint: INVALID');
-
-  if (res.errors?.length) {
-    console.log('\nErrors:');
-    for (const e of res.errors) console.log(`- ${e}`);
-  }
-  if (res.warnings?.length) {
-    console.log('\nWarnings:');
-    for (const w of res.warnings) console.log(`- ${w}`);
-  }
+function renderTemplate(content, ctx) {
+  return content.replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (m, key) => {
+    if (key in ctx) return String(ctx[key]);
+    return m;
+  });
 }
 
-function buildReplacements(blueprint) {
-  const agent = blueprint.agent || {};
-  const api = blueprint.api || {};
-  const model = blueprint.model?.primary || {};
-  const reasoning = model.reasoning_profile || 'fast';
-  const pkgName = (blueprint.sdk && blueprint.sdk.package && blueprint.sdk.package.name)
-    ? blueprint.sdk.package.name
-    : `agent-${agent.id || 'agent'}`;
-
-  return {
-    '__AGENT_ID__': agent.id || 'agent_id',
-    '__AGENT_NAME__': agent.name || 'Agent',
-    '__AGENT_SUMMARY__': agent.summary || '',
-    '__AGENT_BASE_PATH__': api.base_path || `/agent/${agent.id || 'agent'}`,
-    '__LLM_MODEL__': model.model || 'gpt-4.1',
-    '__LLM_REASONING_PROFILE__': reasoning,
-    '__AGENT_PKG_NAME__': pkgName
-  };
+function listFilesRecursive(dir) {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...listFilesRecursive(p));
+    else out.push(p);
+  }
+  return out;
 }
 
-function selectedPromptTier(blueprint) {
-  const tier = blueprint.prompting?.complexity_tier;
-  if (tier === 'tier1' || tier === 'tier2' || tier === 'tier3') return tier;
-  return 'tier2';
-}
-
-function planScaffold(repoRoot, blueprint) {
-  const ops = [];
-  const del = blueprint.deliverables;
-  const moduleRoot = path.resolve(repoRoot, del.agent_module_path);
-  const docsRoot = path.resolve(repoRoot, del.docs_path);
-  const registryPath = path.resolve(repoRoot, del.registry_path);
-
-  ops.push({ action: 'mkdir', path: moduleRoot });
-  ops.push({ action: 'mkdir', path: docsRoot });
-  ops.push({ action: 'update', path: registryPath, reason: 'agent registry' });
-
-  // agent kit files
-  const layout = path.join(TEMPLATES, 'agent-kit', 'node', 'layout');
-  const files = walkFiles(layout);
-  const attach = new Set(blueprint.integration.attach || []);
+function copyDirWithTemplates(srcDir, dstDir, ctx, planOnly, record) {
+  const files = listFilesRecursive(srcDir);
   for (const f of files) {
-    const rel = path.relative(layout, f).replace(/\\/g, '/');
-    if (rel.startsWith('src/adapters/worker') && !attach.has('worker')) continue;
-    if (rel.startsWith('src/adapters/sdk') && !attach.has('sdk')) continue;
-    if (rel.startsWith('src/adapters/cron') && !attach.has('cron')) continue;
-    if (rel.startsWith('src/adapters/pipeline') && !attach.has('pipeline')) continue;
+    const rel = path.relative(srcDir, f);
+    const isTemplate = rel.endsWith('.template');
+    const relOut = isTemplate ? rel.replace(/\.template$/, '') : rel;
+    const dst = path.join(dstDir, relOut);
 
-    const destRel = rel.replace(/\.template$/, '');
-    ops.push({ action: 'write', path: path.join(moduleRoot, destRel), template: rel });
+    record.push({ type: 'create', path: dst });
+
+    if (planOnly) continue;
+
+    if (exists(dst)) continue; // no overwrite
+    const txt = readText(f);
+    const rendered = isTemplate ? renderTemplate(txt, ctx) : txt;
+    writeText(dst, rendered);
   }
-
-  // prompt pack files
-  const tier = selectedPromptTier(blueprint);
-  const promptDir = path.join(TEMPLATES, 'prompt-pack', tier);
-  const promptFiles = walkFiles(promptDir);
-  for (const f of promptFiles) {
-    const rel = path.relative(promptDir, f).replace(/\\/g, '/');
-    ops.push({ action: 'write', path: path.join(moduleRoot, 'prompts', rel), template: `prompt-pack/${tier}/${rel}` });
-  }
-
-  // schemas written from blueprint.schemas
-  ops.push({ action: 'write', path: path.join(moduleRoot, 'schemas', 'RunRequest.schema.json') });
-  ops.push({ action: 'write', path: path.join(moduleRoot, 'schemas', 'RunResponse.schema.json') });
-  ops.push({ action: 'write', path: path.join(moduleRoot, 'schemas', 'AgentError.schema.json') });
-
-  // docs (generated)
-  const docFiles = ['overview.md','integration.md','configuration.md','dataflow.md','runbook.md','evaluation.md'];
-  for (const f of docFiles) {
-    ops.push({ action: 'write', path: path.join(docsRoot, 'doc', f) });
-  }
-
-  return { ops, moduleRoot, docsRoot, registryPath };
 }
 
-function renderDocs(blueprint) {
-  const agent = blueprint.agent;
-  const integration = blueprint.integration;
-  const del = blueprint.deliverables;
-  const api = blueprint.api;
-  const attach = integration.attach || [];
-  const owners = (agent.owners || []).map(o => `- ${o.type}: ${o.id}${o.contact ? ` (${o.contact})` : ''}`).join('\n');
+function buildContextFromBlueprint(bp) {
+  const agentId = bp.agent.id;
+  const agentName = bp.agent.name;
+  const apiBasePath = bp.api.base_path;
+  const sdkPkgName = (bp.sdk && bp.sdk.package && bp.sdk.package.name) ? bp.sdk.package.name : agentId;
+  const sdkPkgVer = (bp.sdk && bp.sdk.package && bp.sdk.package.version) ? bp.sdk.package.version : '0.1.0';
 
-  const inScope = (blueprint.scope.in_scope || []).map(s => `- ${s}`).join('\n');
-  const outScope = (blueprint.scope.out_of_scope || []).map(s => `- ${s}`).join('\n');
-
-  const entrypoints = (blueprint.interfaces || [])
-    .map(i => `- ${i.type}: ${i.entrypoint}`)
-    .join('\n');
-
-  const overview = [
-    `# ${agent.name} (${agent.id})`,
-    '',
-    agent.summary,
-    '',
-    '## Owners',
-    owners || '- (unassigned)',
-    '',
-    '## Entrypoints',
-    entrypoints || '- (none)',
-    '',
-    '## Scope',
-    '### In scope',
-    inScope || '- (none)',
-    '',
-    '### Out of scope',
-    outScope || '- (none)',
-    '',
-    '## Definition of Done',
-    blueprint.scope.definition_of_done || '',
-    ''
-  ].join('\n');
-
-  const integrationMd = [];
-  integrationMd.push('# Integration');
-  integrationMd.push('');
-  integrationMd.push('## Embedding decisions (user-approved)');
-  integrationMd.push(`- Primary: ${integration.primary}`);
-  integrationMd.push(`- Attach: ${attach.length ? attach.join(', ') : '(none)'}`);
-  integrationMd.push(`- Target: ${integration.target?.kind || ''} ${integration.target?.name || ''}`);
-  integrationMd.push(`- Trigger: ${integration.trigger?.kind || ''}`);
-  integrationMd.push('');
-  integrationMd.push('## Contracts');
-  integrationMd.push(`- Upstream: ${integration.upstream_contract_ref}`);
-  integrationMd.push(`- Downstream: ${integration.downstream_contract_ref}`);
-  integrationMd.push('');
-  integrationMd.push('## Failure contract');
-  integrationMd.push(`- Mode: ${integration.failure_contract?.mode}`);
-  integrationMd.push('');
-  integrationMd.push('## Rollback / disable');
-  integrationMd.push(`- Method: ${integration.rollback_or_disable?.method}`);
-  if (integration.rollback_or_disable?.key) integrationMd.push(`- Key: ${integration.rollback_or_disable.key}`);
-  integrationMd.push('');
-
-  if (api) {
-    integrationMd.push('## API');
-    integrationMd.push(`- Base path: ${api.base_path}`);
-    integrationMd.push('- Routes:');
-    for (const r of api.routes || []) {
-      integrationMd.push(`  - ${r.name}: ${String(r.method).toUpperCase()} ${api.base_path}${r.path}`);
-    }
-    integrationMd.push('');
-  }
-
-  if (attach.includes('worker') && blueprint.worker) {
-    const w = blueprint.worker;
-    integrationMd.push('## Worker (attach)');
-    integrationMd.push(`- Source: ${w.source?.kind || ''} ${w.source?.name || ''}`);
-    integrationMd.push(`- Concurrency: ${w.execution?.max_concurrency}`);
-    integrationMd.push(`- Timeout: ${w.execution?.timeout_ms} ms`);
-    integrationMd.push(`- Retries: ${w.retry?.max_attempts} (${w.retry?.backoff?.strategy || ''})`);
-    integrationMd.push(`- Idempotency: ${w.idempotency?.strategy} ${w.idempotency?.key_ref || ''}`.trim());
-    integrationMd.push('');
-  }
-
-  if (attach.includes('cron') && blueprint.cron) {
-    const c = blueprint.cron;
-    integrationMd.push('## Cron (attach)');
-    integrationMd.push(`- Schedule: ${c.schedule} (${c.timezone})`);
-    integrationMd.push(`- Input: ${c.input?.mode}${c.input?.env_var ? ` env:${c.input.env_var}` : ''}${c.input?.path ? ` path:${c.input.path}` : ''}`);
-    integrationMd.push(`- Output: ${c.output?.mode}${c.output?.path ? ` path:${c.output.path}` : ''}`);
-    integrationMd.push('');
-  }
-
-  if (attach.includes('pipeline') && blueprint.pipeline) {
-    const p = blueprint.pipeline;
-    integrationMd.push('## Pipeline (attach)');
-    integrationMd.push(`- Kind: ${p.kind}`);
-    integrationMd.push(`- IO: ${p.io?.input_mode} -> ${p.io?.output_mode}`);
-    integrationMd.push('');
-  }
-
-  if (attach.includes('sdk') && blueprint.sdk) {
-    const s = blueprint.sdk;
-    integrationMd.push('## SDK (attach)');
-    integrationMd.push(`- Language: ${s.language}`);
-    integrationMd.push(`- Package: ${s.package?.name}@${s.package?.version}`);
-    integrationMd.push('- Exports:');
-    for (const ex of s.exports || []) {
-      integrationMd.push(`  - ${ex.name}(${ex.input_schema_ref}) -> ${ex.output_schema_ref}`);
-    }
-    integrationMd.push('');
-  }
-
-  const envVars = (blueprint.configuration?.env_vars || [])
-    .map(v => `| ${v.name} | ${v.required ? 'Yes' : 'No'} | ${v.sensitivity} | ${String(v.description || '').replace(/\n/g, ' ')} |`)
-    .join('\n');
-
-  const cfgMd = [
-    '# Configuration',
-    '',
-    '## Environment variables',
-    '',
-    '| Name | Required | Sensitivity | Description |',
-    '|------|----------|-------------|-------------|',
-    envVars || '| (none) | | | |',
-    '',
-    '## Config files',
-    ...(blueprint.configuration?.config_files || []).map(f => `- \`${f.path}\`: ${f.purpose}`),
-    ''
-  ].join('\n');
-
-  const df = blueprint.data_flow || {};
-  const dataflowMd = [
-    '# Data Flow',
-    '',
-    '## Summary',
-    df.summary || 'TBD: Describe upstream inputs, what is sent to the LLM, and downstream outputs.',
-    '',
-    '## Data classification',
-    (df.data_classes && df.data_classes.length)
-      ? df.data_classes.map(x => `- ${x}`).join('\n')
-      : '- TBD',
-    '',
-    '## Mermaid diagram',
-    '```mermaid',
-    df.diagram_mermaid || 'flowchart LR\n  A[Upstream] --> B[Agent]\n  B --> C[Downstream]',
-    '```',
-    ''
-  ].join('\n');
-
-  const rb = integration.rollback_or_disable || {};
-  const runbookMd = [
-    '# Runbook',
-    '',
-    '## Run / start',
-    `- API: \`node ${del.agent_module_path}/src/adapters/http/server.js\``,
-    attach.includes('worker') ? `- Worker: \`node ${del.agent_module_path}/src/adapters/worker/worker.js\`` : '',
-    attach.includes('cron') ? `- Cron: \`node ${del.agent_module_path}/src/adapters/cron/run-cron.js\`` : '',
-    attach.includes('pipeline') ? `- Pipeline: \`node ${del.agent_module_path}/src/adapters/pipeline/run-step.js < in.json > out.json\`` : '',
-    '',
-    '## Health checks',
-    api ? `- GET ${api.base_path}/health` : '- TBD',
-    '',
-    '## Rollback / disable',
-    `- Method: ${rb.method || 'TBD'}`,
-    rb.key ? `- Key: ${rb.key}` : '',
-    '',
-    '## Troubleshooting',
-    '- Check AGENT_ENABLED',
-    '- Check LLM credentials and base URL',
-    '- Inspect logs for request_id/correlation fields',
-    ''
-  ].filter(Boolean).join('\n');
-
-  const scenarios = (blueprint.acceptance?.scenarios || []).map((s, idx) => [
-    `${idx + 1}. **${s.title}** (${s.priority})`,
-    `   - Given: ${s.given}`,
-    `   - When: ${s.when}`,
-    `   - Then: ${s.then}`,
-    `   - Checks: ${Array.isArray(s.expected_output_checks) ? s.expected_output_checks.join('; ') : ''}`
-  ].join('\n')).join('\n\n');
-
-  const evalMd = [
-    '# Evaluation',
-    '',
-    '## Acceptance scenarios',
-    '',
-    scenarios || 'TBD',
-    '',
-    '## How to run (suggested)',
-    '',
-    '```bash',
-    `# From repo root:`,
-    `cd ${del.agent_module_path}`,
-    `node src/tests/smoke.test.js`,
-    '```',
-    ''
-  ].join('\n');
+  const sampleReq = {
+    contract_version: bp.contracts.version,
+    request_id: 'req_123',
+    input: 'Hello world'
+  };
 
   return {
-    'overview.md': overview,
-    'integration.md': integrationMd.join('\n'),
-    'configuration.md': cfgMd,
-    'dataflow.md': dataflowMd,
-    'runbook.md': runbookMd,
-    'evaluation.md': evalMd,
+    agent_id: agentId,
+    agent_name: agentName,
+    agent_summary: bp.agent.summary,
+    api_base_path: apiBasePath,
+    sdk_package_name: sdkPkgName,
+    sdk_package_version: sdkPkgVer,
+    pipeline_sample_request_json: JSON.stringify(sampleReq).replace(/"/g, '\\"')
   };
 }
 
-function updateRegistry(registryPath, blueprint, apply) {
-  let registry = { version: 1, agents: [] };
+function formatList(items) {
+  if (!items || !items.length) return '- (none)\n';
+  return items.map(x => `- ${x}`).join('\n') + '\n';
+}
 
-  if (fs.existsSync(registryPath)) {
-    try {
-      registry = readJson(registryPath);
-    } catch (e) {
-      return { ok: false, action: 'error', path: registryPath, reason: 'failed to parse registry.json' };
+function buildDocsContext(bp) {
+  const owners = bp.agent.owners || [];
+  const ownersList = owners.map(o => `- ${o.type}: ${o.id}${o.contact ? ` (${o.contact})` : ''}`).join('\n') + '\n';
+
+  const attachList = (bp.integration.attach || []).join(', ') || '(none)';
+
+  const entrypoints = (bp.interfaces || []).map(i => `| ${i.type} | ${i.response_mode} | ${i.entrypoint} |`).join('\n');
+  const entrypointsTable = `| interface | response_mode | entrypoint |\n|---|---|---|\n${entrypoints}\n`;
+
+  const envVars = (bp.configuration.env_vars || []).map(v => `| ${v.name} | ${v.required ? 'yes' : 'no'} | ${v.sensitivity} | ${v.description} |`).join('\n');
+  const envVarsTable = `| name | required | sensitivity | description |\n|---|---|---|\n${envVars}\n`;
+
+  const cfgFiles = (bp.configuration.config_files || []).map(f => `- ${f.path}: ${f.description}`).join('\n') + '\n';
+
+  const scenarios = (bp.acceptance.scenarios || []).map((s, idx) =>
+    `${idx + 1}. **${s.title}** (${s.priority})\n   - Given: ${s.given}\n   - When: ${s.when}\n   - Then: ${s.then}\n   - Checks: ${Array.isArray(s.expected_output_checks) ? s.expected_output_checks.join('; ') : ''}\n`
+  ).join('\n');
+
+  const alerts = (bp.observability.alerts || []).map(a => `- ${a.name} (${a.severity || 'unknown'}): ${a.condition || ''}`).join('\n') + '\n';
+  const logFields = (bp.observability.logs && bp.observability.logs.required_fields) ? bp.observability.logs.required_fields.map(f => `- ${f}`).join('\n') + '\n' : '- (none)\n';
+
+  const conv = bp.conversation || {};
+  const sumNotes = ['summary','summary_buffer'].includes(conv.mode)
+    ? `- update_method: ${conv.summary?.update_method || 'llm'}\n- refresh_policy: ${conv.summary?.refresh_policy || 'threshold'}\n- update_timing: ${conv.summary?.update_timing || 'after_turn'}\n`
+    : '(not applicable)\n';
+
+  const workerNotes = (bp.integration.attach || []).includes('worker') ? `Enabled. source=${bp.worker?.source?.kind || ''}` : '(not enabled)\n';
+  const cronNotes = (bp.integration.attach || []).includes('cron') ? `Enabled. schedule=${bp.cron?.schedule || ''}` : '(not enabled)\n';
+  const pipelineNotes = (bp.integration.attach || []).includes('pipeline') ? `Enabled. context=${bp.pipeline?.context || ''}` : '(not enabled)\n';
+  const sdkNotes = (bp.integration.attach || []).includes('sdk') ? `Enabled. package=${bp.sdk?.package?.name || ''}` : '(not enabled)\n';
+
+  const apiHealth = (bp.api.routes || []).find(r => r.name === 'health');
+  const apiRun = (bp.api.routes || []).find(r => r.name === 'run');
+
+  return {
+    agent_id: bp.agent.id,
+    agent_name: bp.agent.name,
+    agent_summary: bp.agent.summary,
+    owners_list: ownersList,
+    attach_list: attachList,
+    entrypoints_table: entrypointsTable,
+    in_scope_list: formatList(bp.scope.in_scope || []),
+    out_of_scope_list: formatList(bp.scope.out_of_scope || []),
+    definition_of_done: bp.scope.definition_of_done || '',
+    integration_target_kind: bp.integration.target?.kind || '',
+    integration_target_name: bp.integration.target?.name || '',
+    integration_target_details: bp.integration.target?.details || '',
+    integration_trigger_kind: bp.integration.trigger?.kind || '',
+    api_base_path: bp.api.base_path,
+    api_health_path: apiHealth ? apiHealth.path : '/health',
+    api_run_path: apiRun ? apiRun.path : '/run',
+    failure_mode: bp.integration.failure_contract?.mode || '',
+    rollback_method: bp.integration.rollback_or_disable?.method || '',
+    rollback_notes: bp.integration.rollback_or_disable?.notes || '',
+    env_vars_table: envVarsTable,
+    config_files_list: cfgFiles,
+    data_classes: (bp.data_flow.data_classes || []).join(', '),
+    llm_egress_notes: bp.data_flow.llm_egress?.what_is_sent || '',
+    conversation_mode: conv.mode || 'no-need',
+    conversation_scope: conv.scope || '',
+    conversation_storage_kind: conv.storage?.kind || '',
+    conversation_ttl_seconds: conv.retention?.ttl_seconds || 0,
+    conversation_max_items: conv.retention?.max_items || 0,
+    conversation_redaction_mode: conv.redaction?.mode || 'none',
+    conversation_summary_notes: sumNotes,
+    retention_notes: bp.data_flow.retention?.notes || '',
+    log_fields_list: logFields,
+    alerts_list: alerts,
+    latency_p50: bp.budgets.latency_ms?.p50 || 0,
+    latency_p95: bp.budgets.latency_ms?.p95 || 0,
+    timeout_budget: bp.budgets.latency_ms?.timeout_budget_ms || bp.api.timeout_budget_ms || 0,
+    throughput_rps: bp.budgets.throughput?.rps || 0,
+    throughput_concurrency: bp.budgets.throughput?.concurrency || 0,
+    max_input_tokens: bp.budgets.tokens?.max_input_tokens || 0,
+    max_output_tokens: bp.budgets.tokens?.max_output_tokens || 0,
+    max_usd_per_task: bp.budgets.cost?.max_usd_per_task || 0,
+    acceptance_scenarios_list: scenarios,
+    worker_notes: workerNotes,
+    cron_notes: cronNotes,
+    pipeline_notes: pipelineNotes,
+    sdk_notes: sdkNotes
+  };
+}
+
+function sanitizeManifest(bp) {
+  // Keep blueprint-like structure but remove obviously irrelevant items (no secrets should exist anyway).
+  const m = JSON.parse(JSON.stringify(bp));
+  return m;
+}
+
+function planScaffold(bp, repoRoot) {
+  const plan = [];
+
+  const agentDir = safeResolve(repoRoot, bp.deliverables.agent_module_path);
+  const docsDir = safeResolve(repoRoot, bp.deliverables.docs_path);
+  const registryPath = safeResolve(repoRoot, bp.deliverables.registry_path);
+
+  // Agent kit templates
+  const templatesRoot = loadTemplatesRoot();
+  const kitRoot = path.join(templatesRoot, 'agent-kit', 'node', 'layout');
+  const ctx = buildContextFromBlueprint(bp);
+
+  const kitFiles = listFilesRecursive(kitRoot);
+  for (const f of kitFiles) {
+    const rel = path.relative(kitRoot, f);
+    const outRel = rel.endsWith('.template') ? rel.replace(/\.template$/, '') : rel;
+    plan.push({ action: 'create', path: path.join(agentDir, outRel) });
+  }
+
+  // Prompts
+  const tier = (bp.prompting && bp.prompting.complexity_tier) ? bp.prompting.complexity_tier : 'tier2';
+  const promptSrc = path.join(templatesRoot, 'prompt-pack', tier);
+  const promptFiles = exists(promptSrc) ? listFilesRecursive(promptSrc) : [];
+  for (const f of promptFiles) {
+    const rel = path.relative(promptSrc, f);
+    plan.push({ action: 'create', path: path.join(agentDir, 'prompts', rel) });
+  }
+
+  // Schemas
+  for (const [name, schemaObj] of Object.entries(bp.schemas || {})) {
+    plan.push({ action: 'create', path: path.join(agentDir, 'schemas', `${name}.schema.json`) });
+  }
+
+  // Manifest copy
+  plan.push({ action: 'create', path: path.join(agentDir, 'config', 'agent.manifest.json') });
+
+  // .env.example is provided by the agent-kit template and is finalized in applyScaffold.
+
+  // Docs
+  const docsTemplates = path.join(templatesRoot, 'docs');
+  const docFiles = listFilesRecursive(docsTemplates).filter(f => f.endsWith('.template.md'));
+  for (const f of docFiles) {
+    const base = path.basename(f).replace(/\.template\.md$/, '.md');
+    plan.push({ action: 'create', path: path.join(docsDir, base) });
+  }
+
+  // Registry (merge)
+  plan.push({ action: exists(registryPath) ? 'update' : 'create', path: registryPath });
+
+  return { agentDir, docsDir, registryPath, plan, ctx };
+}
+
+function applyScaffold(bp, repoRoot, apply) {
+  const { agentDir, docsDir, registryPath, plan, ctx } = planScaffold(bp, repoRoot);
+
+  const templatesRoot = loadTemplatesRoot();
+  const kitRoot = path.join(templatesRoot, 'agent-kit', 'node', 'layout');
+
+  const created = [];
+  const skipped = [];
+
+  // 1) Create agent module from kit templates
+  for (const src of listFilesRecursive(kitRoot)) {
+    const rel = path.relative(kitRoot, src);
+    const outRel = rel.endsWith('.template') ? rel.replace(/\.template$/, '') : rel;
+    const dst = path.join(agentDir, outRel);
+
+    if (exists(dst)) { skipped.push(dst); continue; }
+    created.push(dst);
+    if (!apply) continue;
+
+    const txt = readText(src);
+    const rendered = rel.endsWith('.template') ? renderTemplate(txt, ctx) : txt;
+    writeText(dst, rendered);
+  }
+
+  // 2) Prompts
+  const tier = (bp.prompting && bp.prompting.complexity_tier) ? bp.prompting.complexity_tier : 'tier2';
+  const promptSrc = path.join(templatesRoot, 'prompt-pack', tier);
+  if (exists(promptSrc)) {
+    for (const src of listFilesRecursive(promptSrc)) {
+      const rel = path.relative(promptSrc, src);
+      const dst = path.join(agentDir, 'prompts', rel);
+      if (exists(dst)) { skipped.push(dst); continue; }
+      created.push(dst);
+      if (!apply) continue;
+      const txt = readText(src);
+      writeText(dst, txt);
     }
   }
 
-  if (!registry || typeof registry !== 'object') registry = { version: 1, agents: [] };
-  if (!Array.isArray(registry.agents)) registry.agents = [];
-
-  const id = blueprint.agent.id;
-  const entry = {
-    id,
-    name: blueprint.agent.name,
-    summary: blueprint.agent.summary,
-    owners: blueprint.agent.owners || [],
-    primary: blueprint.integration.primary,
-    attach: blueprint.integration.attach || [],
-    module_path: blueprint.deliverables.agent_module_path,
-    docs_path: blueprint.deliverables.docs_path,
-    interfaces: (blueprint.interfaces || []).map(i => ({ type: i.type, entrypoint: i.entrypoint })),
-    last_generated_at: nowIso(),
-    status: 'active'
-  };
-
-  const idx = registry.agents.findIndex(a => a && a.id === id);
-  if (idx >= 0) registry.agents[idx] = entry;
-  else registry.agents.push(entry);
-
-  return writeJson(registryPath, registry, apply, true);
-}
-
-function cmdStart(args) {
-  const runId = `ab_${new Date().toISOString().replace(/[:.]/g, '-')}_${randId(5)}`;
-  const defaultWorkdir = path.join(os.tmpdir(), 'agent_builder', runId);
-  const workdir = path.resolve(args.workdir || defaultWorkdir);
-
-  ensureDir(workdir, true);
-  ensureDir(path.join(workdir, 'stageA'), true);
-  ensureDir(path.join(workdir, 'stageB'), true);
-  ensureDir(path.join(workdir, 'stageC'), true);
-  ensureDir(path.join(workdir, 'stageD'), true);
-  ensureDir(path.join(workdir, 'stageE'), true);
-
-  // Copy Stage A templates
-  writeText(path.join(workdir, 'stageA', 'conversation-prompts.md'), readText(path.join(TEMPLATES, 'conversation-prompts.md')), true, true);
-  writeText(path.join(workdir, 'stageA', 'interview-notes.md'), readText(path.join(TEMPLATES, 'interview-notes.template.md')), true, true);
-  writeText(path.join(workdir, 'stageA', 'integration-decision.md'), readText(path.join(TEMPLATES, 'integration-decision.template.md')), true, true);
-
-  // Copy Stage B references/examples
-  writeText(path.join(workdir, 'stageB', 'agent-blueprint.schema.json'), readText(path.join(TEMPLATES, 'agent-blueprint.schema.json')), true, true);
-  for (const ex of [
-    'agent-blueprint.example.api-worker.json',
-    'agent-blueprint.example.api-sdk.json',
-    'agent-blueprint.example.full.json'
-  ]) {
-    writeText(path.join(workdir, 'stageB', ex), readText(path.join(TEMPLATES, ex)), true, true);
+  // 3) Schemas
+  for (const [name, schemaObj] of Object.entries(bp.schemas || {})) {
+    const dst = path.join(agentDir, 'schemas', `${name}.schema.json`);
+    if (exists(dst)) { skipped.push(dst); continue; }
+    created.push(dst);
+    if (!apply) continue;
+    writeJson(dst, schemaObj);
   }
 
-  // Draft blueprint starter (copy the API+worker example by default)
-  writeText(
-    path.join(workdir, 'stageB', 'agent-blueprint.json'),
-    readText(path.join(TEMPLATES, 'agent-blueprint.example.api-worker.json')),
-    true,
-    false
-  );
+  // 4) Manifest copy
+  const manifestDst = path.join(agentDir, 'config', 'agent.manifest.json');
+  if (!exists(manifestDst)) {
+    created.push(manifestDst);
+    if (apply) writeJson(manifestDst, sanitizeManifest(bp));
+  } else {
+    skipped.push(manifestDst);
+  }
+
+  // 5) .env.example
+  const envDst = path.join(agentDir, '.env.example');
+  const desiredEnvVars = Array.isArray(bp.configuration?.env_vars) ? bp.configuration.env_vars : [];
+  if (!exists(envDst)) {
+    created.push(envDst);
+    if (apply) {
+      // Seed file with a header; actual variables will be appended/merged below.
+      const base = [
+        `# .env.example for ${bp.agent.id}`,
+        '# Never commit real secrets. This file is placeholders only.',
+        ''
+      ].join('\n');
+      writeText(envDst, base);
+    }
+  }
+
+  // Always ensure required env vars are present (append-only; never delete existing lines).
+  if (apply) {
+    const current = exists(envDst) ? readText(envDst) : '';
+    let out = current;
+    const missing = [];
+
+    for (const v of desiredEnvVars) {
+      if (!v || !v.name) continue;
+      const name = String(v.name).trim();
+      if (!name) continue;
+      const re = new RegExp(`^\\s*${name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\s*=`, 'm');
+      if (re.test(out)) continue;
+      missing.push(v);
+    }
+
+    if (missing.length) {
+      if (!out.endsWith('\n')) out += '\n';
+      out += '# --- agent_builder managed env vars (append-only) ---\n';
+      for (const v of missing) {
+        const desc = String(v.description || '').trim();
+        if (desc) out += `# ${desc}\n`;
+        out += `${v.name}=${v.example_placeholder || ''}\n\n`;
+      }
+      writeText(envDst, out);
+    }
+  }
+
+  // 6) Docs
+  const docsTemplates = path.join(templatesRoot, 'docs');
+  const docCtx = buildDocsContext(bp);
+  for (const src of listFilesRecursive(docsTemplates)) {
+    if (!src.endsWith('.template.md')) continue;
+    const base = path.basename(src).replace(/\.template\.md$/, '.md');
+    const dst = path.join(docsDir, base);
+    if (exists(dst)) { skipped.push(dst); continue; }
+    created.push(dst);
+    if (!apply) continue;
+    const rendered = renderTemplate(readText(src), docCtx);
+    writeText(dst, rendered);
+  }
+
+  // 7) Registry merge (always update/create)
+  const registryDir = path.dirname(registryPath);
+  const relAgentModule = bp.deliverables.agent_module_path;
+  const relDocs = bp.deliverables.docs_path;
+
+  const entry = {
+    id: bp.agent.id,
+    name: bp.agent.name,
+    summary: bp.agent.summary,
+    owners: bp.agent.owners,
+    module_path: relAgentModule,
+    docs_path: relDocs,
+    primary: 'api',
+    attach: bp.integration.attach || [],
+    entrypoints: (bp.interfaces || []).map(i => ({ type: i.type, entrypoint: i.entrypoint, response_mode: i.response_mode })),
+    contract_version: bp.contracts.version,
+    updated_at: nowIso()
+  };
+
+  if (apply) {
+    fs.mkdirSync(registryDir, { recursive: true });
+    let reg = { version: 1, agents: [] };
+    if (exists(registryPath)) {
+      try { reg = readJson(registryPath); } catch (e) { die(`Failed to parse existing registry: ${registryPath}`); }
+      if (!Array.isArray(reg.agents)) reg.agents = [];
+      if (!reg.version) reg.version = 1;
+    }
+    const idx = reg.agents.findIndex(a => a && a.id === entry.id);
+    if (idx >= 0) reg.agents[idx] = { ...reg.agents[idx], ...entry };
+    else reg.agents.push(entry);
+    writeJson(registryPath, reg);
+  }
+
+  return { plan, created, skipped, registryPath };
+}
+
+function commandStart(args) {
+  const templatesRoot = loadTemplatesRoot();
+  const stageATemplatesDir = path.join(templatesRoot, 'stageA');
+
+  const repoRoot = args['repo-root'] ? path.resolve(args['repo-root']) : process.cwd();
+  const runId = randomId();
+
+  let workdir = args.workdir ? path.resolve(args.workdir) : path.join(os.tmpdir(), 'agent_builder', runId);
+  fs.mkdirSync(workdir, { recursive: true });
+
+  // Stage A + Stage B dirs
+  fs.mkdirSync(path.join(workdir, 'stageA'), { recursive: true });
+  fs.mkdirSync(path.join(workdir, 'stageB'), { recursive: true });
+
+  // Write Stage A docs
+  const interviewTpl = readText(path.join(stageATemplatesDir, 'interview-notes.template.md'));
+  const integTpl = readText(path.join(stageATemplatesDir, 'integration-decision.template.md'));
+  writeText(path.join(workdir, 'stageA', 'interview-notes.md'), interviewTpl);
+  writeText(path.join(workdir, 'stageA', 'integration-decision.md'), integTpl);
+
+  // Write blueprint example
+  const bpExample = readText(path.join(templatesRoot, 'agent-blueprint.example.json'));
+  writeText(path.join(workdir, 'stageB', 'agent-blueprint.json'), bpExample);
 
   const state = {
     version: 1,
     run_id: runId,
     created_at: nowIso(),
-    workdir,
     stage: 'A',
-    blueprint_path: path.join('stageB', 'agent-blueprint.json'),
-    stages: {
-      A: { status: 'in_progress', user_approved: false, artifacts: ['stageA/interview-notes.md','stageA/integration-decision.md'] },
-      B: { status: 'not_started', user_approved: false, artifacts: ['stageB/agent-blueprint.json'] },
-      C: { status: 'not_started', user_approved: false },
-      D: { status: 'not_started', user_approved: false },
-      E: { status: 'not_started', user_approved: false }
+    workdir,
+    repo_root: repoRoot,
+    approvals: { A: false, B: false, C: false, D: false, E: false },
+    stageA: {
+      interview_notes_path: 'stageA/interview-notes.md',
+      integration_decision_path: 'stageA/integration-decision.md'
+    },
+    stageB: {
+      blueprint_path: 'stageB/agent-blueprint.json',
+      validated: false
+    },
+    stageC: {
+      planned: false,
+      applied: false,
+      generated_paths: [],
+      skipped_paths: []
     },
     history: []
   };
-  recordEvent(state, 'start', { workdir });
-  saveState(workdir, state, true);
+  addHistory(state, 'created', { repo_root: repoRoot });
 
-  console.log('========================================');
-  console.log(' agent_builder run created');
-  console.log('========================================');
-  console.log(`workdir: ${workdir}`);
-  console.log('');
-  console.log('Next steps:');
-  console.log(`1) Fill Stage A notes: ${path.join(workdir, 'stageA')}`);
-  console.log('2) Draft blueprint: stageB/agent-blueprint.json');
-  console.log('3) Validate: validate-blueprint --workdir <workdir>');
-  console.log('4) Plan/apply scaffold into repo: plan/apply --repo-root <repo>');
-  console.log('');
-  console.log('NOTE: Stage A must remain temporary; do not commit this workdir.');
+  saveState(workdir, state);
+
+  console.log(`Created workdir: ${workdir}`);
+  console.log(`Next: fill Stage A docs, then approve Stage A:`);
+  console.log(`  node ${path.relative(process.cwd(), __filename)} approve --workdir ${workdir} --stage A`);
 }
 
-function cmdStatus(args) {
-  const workdir = args.workdir ? path.resolve(args.workdir) : null;
-  if (!workdir) {
-    console.error('Missing --workdir');
-    process.exit(2);
-  }
+function commandStatus(args) {
+  const workdir = getWorkdir(args);
+  ensureWorkdir(workdir);
   const state = loadState(workdir);
-  if (!state) {
-    console.error(`No state file found in workdir: ${workdir}`);
-    process.exit(2);
-  }
 
+  console.log(`workdir: ${state.workdir}`);
   console.log(`run_id: ${state.run_id}`);
   console.log(`stage: ${state.stage}`);
-  console.log('');
-  console.log('Stage summary:');
-  for (const k of ['A','B','C','D','E']) {
-    const s = state.stages?.[k] || {};
-    console.log(`- ${k}: status=${s.status || 'n/a'} user_approved=${!!s.user_approved}`);
-  }
-
-  console.log('');
-  console.log('Suggested next action:');
-  if (!state.stages?.A?.user_approved) {
-    console.log('- Complete Stage A and run: approve --stage A');
-  } else if (!state.stages?.B?.user_approved) {
-    console.log('- Draft/validate blueprint and run: approve --stage B');
-  } else if (!state.stages?.C?.user_approved) {
-    console.log('- Plan/apply scaffold and run: approve --stage C');
-  } else if (!state.stages?.D?.user_approved) {
-    console.log('- Implement core logic/tools and run: approve --stage D');
-  } else if (!state.stages?.E?.user_approved) {
-    console.log('- Verify + docs + cleanup and run: approve --stage E, then finish');
-  } else {
-    console.log('- All stages approved. Run finish to cleanup.');
-  }
+  console.log(`approvals: A=${state.approvals.A} B=${state.approvals.B}`);
+  console.log(`Stage A docs:`);
+  console.log(`  - ${path.join(workdir, state.stageA.interview_notes_path)}`);
+  console.log(`  - ${path.join(workdir, state.stageA.integration_decision_path)}`);
+  console.log(`Stage B blueprint:`);
+  console.log(`  - ${path.join(workdir, state.stageB.blueprint_path)} (validated=${state.stageB.validated})`);
+  console.log(`Stage C: planned=${state.stageC.planned} applied=${state.stageC.applied}`);
 }
 
-function cmdApprove(args) {
-  const workdir = args.workdir ? path.resolve(args.workdir) : null;
+function commandApprove(args) {
+  const workdir = getWorkdir(args);
+  ensureWorkdir(workdir);
+
   const stage = args.stage;
-  if (!workdir) {
-    console.error('Missing --workdir');
-    process.exit(2);
-  }
-  if (!stage || !['A','B','C','D','E'].includes(stage)) {
-    console.error('Missing/invalid --stage (A|B|C|D|E)');
-    process.exit(2);
-  }
+  if (!stage || !['A','B','C','D','E'].includes(stage)) die('approve requires --stage <A|B|C|D|E>');
+
   const state = loadState(workdir);
-  if (!state) {
-    console.error(`No state file found in workdir: ${workdir}`);
-    process.exit(2);
-  }
+  state.approvals[stage] = true;
+  state[`stage${stage}`] = state[`stage${stage}`] || {};
+  state[`stage${stage}`].approved_at = nowIso();
 
-  state.stages = state.stages || {};
-  state.stages[stage] = state.stages[stage] || {};
-  state.stages[stage].user_approved = true;
-  state.stages[stage].status = 'approved';
-  state.stage = stage === 'E' ? 'DONE' : String.fromCharCode(stage.charCodeAt(0) + 1);
+  // Stage transitions (best-effort)
+  if (stage === 'A') state.stage = 'B';
+  if (stage === 'B') state.stage = 'C';
 
-  recordEvent(state, 'approve', { stage });
-  saveState(workdir, state, true);
+  addHistory(state, 'approved', { stage });
+  saveState(workdir, state);
 
-  console.log(`Approved stage ${stage}. Current stage is now ${state.stage}.`);
+  console.log(`Approved stage ${stage}. Current stage=${state.stage}.`);
 }
 
-function cmdValidateBlueprint(args) {
-  const workdir = args.workdir ? path.resolve(args.workdir) : null;
-  if (!workdir) {
-    console.error('Missing --workdir');
-    process.exit(2);
-  }
+function commandValidateBlueprint(args) {
+  const workdir = getWorkdir(args);
+  ensureWorkdir(workdir);
+  const fmt = args.format || 'text';
+
   const state = loadState(workdir);
-  const blueprintPath = pickBlueprintPath(args, workdir, state);
+  const bpPath = path.join(workdir, state.stageB.blueprint_path);
+  if (!exists(bpPath)) die(`Blueprint not found: ${bpPath}`);
+  const bp = readJson(bpPath);
 
-  if (!fs.existsSync(blueprintPath)) {
-    console.error(`Blueprint not found: ${blueprintPath}`);
-    process.exit(2);
+  const result = validateBlueprint(bp);
+
+  state.stageB.validated = result.ok;
+  state.stageB.validated_at = nowIso();
+  addHistory(state, 'validate-blueprint', { ok: result.ok, errors: result.errors.length, warnings: result.warnings.length });
+  saveState(workdir, state);
+
+  if (fmt === 'json') {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    if (result.ok) console.log('OK: blueprint validation passed.');
+    else console.log('FAIL: blueprint validation failed.');
+    if (result.errors.length) {
+      console.log('\nErrors:');
+      for (const e of result.errors) console.log(`- ${e}`);
+    }
+    if (result.warnings.length) {
+      console.log('\nWarnings:');
+      for (const w of result.warnings) console.log(`- ${w}`);
+    }
   }
 
-  let bp;
-  try {
-    bp = readJson(blueprintPath);
-  } catch (e) {
-    console.error(`Failed to parse JSON: ${blueprintPath}`);
-    process.exit(2);
-  }
-
-  const res = validateBlueprint(bp);
-  printValidateResult(res, args.format === 'json' ? 'json' : 'text');
-
-  if (res.ok && state) {
-    state.stages.B.status = 'ready_for_review';
-    recordEvent(state, 'validate_blueprint', { ok: true, blueprintPath });
-    saveState(workdir, state, true);
-  }
-
-  if (!res.ok) process.exit(1);
+  process.exit(result.ok ? 0 : 1);
 }
 
-function cmdPlan(args) {
-  const workdir = args.workdir ? path.resolve(args.workdir) : null;
-  const repoRoot = args['repo-root'] ? path.resolve(args['repo-root']) : null;
-  if (!workdir) {
-    console.error('Missing --workdir');
-    process.exit(2);
-  }
-  if (!repoRoot) {
-    console.error('Missing --repo-root');
-    process.exit(2);
-  }
+function commandPlan(args) {
+  const workdir = getWorkdir(args);
+  ensureWorkdir(workdir);
+  const repoRoot = args['repo-root'] ? path.resolve(args['repo-root']) : process.cwd();
 
   const state = loadState(workdir);
-  const blueprintPath = pickBlueprintPath(args, workdir, state);
-  const bp = readJson(blueprintPath);
+  const bpPath = path.join(workdir, state.stageB.blueprint_path);
+  const bp = readJson(bpPath);
+
   const val = validateBlueprint(bp);
-  if (!val.ok) {
-    console.error('Blueprint is invalid. Fix errors before planning.');
-    printValidateResult(val, 'text');
-    process.exit(1);
-  }
+  if (!val.ok) die('Blueprint invalid. Run validate-blueprint and fix errors before planning.');
 
-  const plan = planScaffold(repoRoot, bp);
-  console.log('Planned operations (dry-run):');
-  for (const op of plan.ops) {
-    console.log(`- ${op.action.toUpperCase()} ${path.relative(repoRoot, op.path)}`);
+  const { plan } = planScaffold(bp, repoRoot);
+
+  state.stageC.planned = true;
+  state.stageC.planned_at = nowIso();
+  addHistory(state, 'plan', { repo_root: repoRoot, items: plan.length });
+  saveState(workdir, state);
+
+  console.log(`Plan (${plan.length} items):`);
+  for (const p of plan) {
+    console.log(`- [${p.action}] ${p.path}`);
   }
 }
 
-function cmdApply(args) {
-  const workdir = args.workdir ? path.resolve(args.workdir) : null;
-  const repoRoot = args['repo-root'] ? path.resolve(args['repo-root']) : null;
+function commandApply(args) {
+  const workdir = getWorkdir(args);
+  ensureWorkdir(workdir);
+  const repoRoot = args['repo-root'] ? path.resolve(args['repo-root']) : process.cwd();
   const apply = !!args.apply;
-  if (!workdir) {
-    console.error('Missing --workdir');
-    process.exit(2);
-  }
-  if (!repoRoot) {
-    console.error('Missing --repo-root');
-    process.exit(2);
-  }
-  if (!apply) {
-    console.error('Refusing to write without --apply. (Run `plan` first.)');
-    process.exit(2);
-  }
 
   const state = loadState(workdir);
-  const blueprintPath = pickBlueprintPath(args, workdir, state);
-  const bp = readJson(blueprintPath);
+  if (!state.approvals.A) die('Refusing to apply: Stage A is not approved. Run approve --stage A first.');
+  if (!state.approvals.B) die('Refusing to apply: Stage B is not approved. Run approve --stage B first.');
+
+  const bpPath = path.join(workdir, state.stageB.blueprint_path);
+  const bp = readJson(bpPath);
+
   const val = validateBlueprint(bp);
-  if (!val.ok) {
-    console.error('Blueprint is invalid. Fix errors before apply.');
-    printValidateResult(val, 'text');
-    process.exit(1);
+  if (!val.ok) die('Refusing to apply: blueprint validation failed. Run validate-blueprint and fix errors.');
+
+  const result = applyScaffold(bp, repoRoot, apply);
+
+  state.stageC.applied = apply;
+  state.stageC.applied_at = nowIso();
+  state.stageC.generated_paths = result.created;
+  state.stageC.skipped_paths = result.skipped;
+  addHistory(state, 'apply', { repo_root: repoRoot, apply, created: result.created.length, skipped: result.skipped.length });
+  saveState(workdir, state);
+
+  console.log(apply ? 'Applied scaffold.' : 'Dry-run (no changes written).');
+  console.log(`Created (${result.created.length})`);
+  for (const p of result.created.slice(0, 200)) console.log(`  + ${p}`);
+  if (result.created.length > 200) console.log(`  ... (${result.created.length - 200} more)`);
+
+  console.log(`Skipped existing (${result.skipped.length})`);
+  for (const p of result.skipped.slice(0, 200)) console.log(`  = ${p}`);
+  if (result.skipped.length > 200) console.log(`  ... (${result.skipped.length - 200} more)`);
+
+  console.log(`Registry: ${result.registryPath}`);
+  if (!apply) {
+    console.log('\nTo apply changes, rerun with --apply.');
   }
-
-  const replacements = buildReplacements(bp);
-  const plan = planScaffold(repoRoot, bp);
-
-  // directories
-  ensureDir(plan.moduleRoot, true);
-  ensureDir(plan.docsRoot, true);
-
-  // copy agent kit files
-  const layout = path.join(TEMPLATES, 'agent-kit', 'node', 'layout');
-  const files = walkFiles(layout);
-  const attach = new Set(bp.integration.attach || []);
-  for (const f of files) {
-    const rel = path.relative(layout, f).replace(/\\/g, '/');
-    if (rel.startsWith('src/adapters/worker') && !attach.has('worker')) continue;
-    if (rel.startsWith('src/adapters/sdk') && !attach.has('sdk')) continue;
-    if (rel.startsWith('src/adapters/cron') && !attach.has('cron')) continue;
-    if (rel.startsWith('src/adapters/pipeline') && !attach.has('pipeline')) continue;
-
-    const destRel = rel.replace(/\.template$/, '');
-    const dest = path.join(plan.moduleRoot, destRel);
-    copyFile(f, dest, true, replacements);
-  }
-
-  // prompt pack copy
-  const tier = selectedPromptTier(bp);
-  const promptDir = path.join(TEMPLATES, 'prompt-pack', tier);
-  const promptFiles = walkFiles(promptDir);
-  for (const f of promptFiles) {
-    const rel = path.relative(promptDir, f).replace(/\\/g, '/');
-    const dest = path.join(plan.moduleRoot, 'prompts', rel);
-    copyFile(f, dest, true, replacements);
-  }
-
-  // schemas from blueprint.schemas
-  writeJson(path.join(plan.moduleRoot, 'schemas', 'RunRequest.schema.json'), bp.schemas.RunRequest, true, false);
-  writeJson(path.join(plan.moduleRoot, 'schemas', 'RunResponse.schema.json'), bp.schemas.RunResponse, true, false);
-  writeJson(path.join(plan.moduleRoot, 'schemas', 'AgentError.schema.json'), bp.schemas.AgentError, true, false);
-
-  // docs generation
-  const docs = renderDocs(bp);
-  for (const [name, content] of Object.entries(docs)) {
-    writeText(path.join(plan.docsRoot, 'doc', name), content + '\n', true, false);
-  }
-
-  // registry update
-  const regRes = updateRegistry(plan.registryPath, bp, true);
-  if (!regRes.ok) {
-    console.error(`Failed to update registry: ${plan.registryPath}`);
-    process.exit(1);
-  }
-
-  // update state
-  if (state) {
-    state.stages.C.status = 'applied';
-    recordEvent(state, 'apply', { repoRoot, agentId: bp.agent.id });
-    saveState(workdir, state, true);
-  }
-
-  console.log('========================================');
-  console.log(' Scaffold applied');
-  console.log('========================================');
-  console.log(`Agent module: ${path.relative(repoRoot, plan.moduleRoot)}`);
-  console.log(`Docs:         ${path.relative(repoRoot, plan.docsRoot)}`);
-  console.log(`Registry:     ${path.relative(repoRoot, plan.registryPath)}`);
 }
 
-function cmdFinish(args) {
-  const workdir = args.workdir ? path.resolve(args.workdir) : null;
-  const force = !!args.force;
-  if (!workdir) {
-    console.error('Missing --workdir');
-    process.exit(2);
+/**
+ * Verify command: execute a minimal set of acceptance scenarios (HTTP-first) and generate evidence.
+ *
+ * The verification runs the generated agent locally (child process) and drives it via HTTP
+ * against a local mock LLM server. No external network is required.
+ *
+ * Unsupported scenarios will be marked as skipped (with structural checks recorded).
+ */
+async function commandVerify(args) {
+  const workdir = getWorkdir(args);
+  ensureWorkdir(workdir);
+  const repoRoot = args['repo-root'] ? path.resolve(args['repo-root']) : process.cwd();
+  const fmt = args.format || 'text';
+
+  const state = loadState(workdir);
+  if (!state.stageC.applied) {
+    die('Refusing to verify: Stage C (scaffold) has not been applied yet.');
   }
-  if (!fs.existsSync(workdir)) {
-    console.log(`workdir does not exist: ${workdir}`);
+
+  const bpPath = path.join(workdir, state.stageB.blueprint_path);
+  const bp = readJson(bpPath);
+
+  const agentDir = safeResolve(repoRoot, bp.deliverables.agent_module_path);
+  const docsDir = safeResolve(repoRoot, bp.deliverables.docs_path);
+
+  const manifestPath = path.join(agentDir, 'config', 'agent.manifest.json');
+  if (!exists(manifestPath)) die(`Missing agent manifest: ${manifestPath}`);
+  const manifest = readJson(manifestPath);
+
+  const contractVersion = manifest?.contracts?.version || bp?.contracts?.version || '1.0.0';
+  const basePath = manifest?.api?.base_path || bp?.api?.base_path || '';
+
+  const verifiedAt = nowIso();
+  const scenarios = Array.isArray(bp.acceptance?.scenarios) ? bp.acceptance.scenarios : [];
+  const results = [];
+
+  // Workdir for verification artifacts
+  const stageEDir = path.join(workdir, 'stageE');
+  fs.mkdirSync(stageEDir, { recursive: true });
+
+  // Provider env vars (from manifest; fallback to defaults)
+  const primaryProvider = manifest?.model?.primary?.provider || {};
+  const baseUrlEnv = primaryProvider.base_url_env || 'LLM_BASE_URL';
+  const apiKeyEnv = primaryProvider.api_key_env || 'LLM_API_KEY';
+
+  // Conversation header key (if configured)
+  const convHeaderName =
+    manifest?.conversation?.key?.source === 'header'
+      ? String(manifest?.conversation?.key?.name || '')
+      : '';
+
+  function parseExplicitEnvFlag(text, key) {
+    const lc = String(text || '').toLowerCase();
+    const k = String(key || '').toLowerCase();
+    if (!k) return null;
+    const reEq = new RegExp(`${k}\\s*=\\s*(true|false|1|0)`, 'i');
+    const reColon = new RegExp(`${k}\\s*:\\s*(true|false|1|0)`, 'i');
+    const m = lc.match(reEq) || lc.match(reColon);
+    if (!m) return null;
+    const v = String(m[1]).toLowerCase();
+    return (v === 'true' || v === '1');
+  }
+
+  function inferScenarioKind({ title, when, expectedChecks }) {
+    const titleLc = String(title || '').toLowerCase();
+    const whenLc = String(when || '').toLowerCase();
+    const exp = Array.isArray(expectedChecks) ? expectedChecks.map(x => String(x || '').toLowerCase()) : [];
+
+    const wantsWs = whenLc.includes('/ws') || whenLc.includes('websocket') || titleLc.includes('websocket') || titleLc.includes('ws ');
+    const wantsSse = whenLc.includes('sse') || whenLc.includes('server-sent') || 
+                     titleLc.includes('sse') || titleLc.includes('server-sent events') ||
+                     whenLc.includes('text/event-stream') || titleLc.includes('event-stream');
+    const wantsPipeline = whenLc.includes('pipeline') || whenLc.includes('stdin') || titleLc.includes('pipeline');
+    const wantsCron = whenLc.includes('cron') || titleLc.includes('cron');
+    const wantsWorker = whenLc.includes('worker') || titleLc.includes('worker');
+    const wantsSdk = whenLc.includes('sdk') || titleLc.includes('sdk') || whenLc.includes("require('");
+    const wantsHealth = whenLc.includes('get') && whenLc.includes('/health');
+    const wantsHttpRun = whenLc.includes('post') && whenLc.includes('/run');
+
+    const wantsConversationDebug =
+      exp.some(c => c.includes('messages_count')) ||
+      exp.some(c => c.includes('conversation')) ||
+      titleLc.includes('conversation');
+
+    if (wantsWs) return 'ws_streaming';
+    if (wantsSse) return 'sse_streaming';
+    if (wantsPipeline) return 'pipeline';
+    if (wantsCron) return 'cron';
+    if (wantsWorker) return 'worker';
+    if (wantsSdk) return 'sdk';
+    if (wantsHealth) return 'http_health';
+    if (wantsHttpRun && wantsConversationDebug) return 'http_conversation_debug';
+    if (wantsHttpRun) return 'http_run';
+
+    return 'unsupported';
+  }
+
+  function safeParseJson(txt) {
+    try {
+      return { ok: true, json: JSON.parse(String(txt || '')) };
+    } catch (e) {
+      return { ok: false, error: String(e && e.message ? e.message : e) };
+    }
+  }
+
+  async function spawnCapture({ command, args, cwd, env, stdinText, timeoutMs }) {
+    return await new Promise((resolve) => {
+      const child = spawn(command, args || [], {
+        cwd,
+        env: Object.assign({}, process.env, env || {}),
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      const out = { stdout: '', stderr: '', exitCode: null, timedOut: false };
+      child.stdout.on('data', (d) => { out.stdout += String(d); });
+      child.stderr.on('data', (d) => { out.stderr += String(d); });
+
+      let timer = null;
+      if (timeoutMs) {
+        timer = setTimeout(() => {
+          out.timedOut = true;
+          try { child.kill('SIGKILL'); } catch (e) {}
+        }, timeoutMs);
+      }
+
+      child.on('close', (code) => {
+        if (timer) clearTimeout(timer);
+        out.exitCode = code;
+        resolve(out);
+      });
+
+      if (stdinText !== undefined && stdinText !== null) {
+        try { child.stdin.write(String(stdinText)); } catch (e) {}
+      }
+      try { child.stdin.end(); } catch (e) {}
+    });
+  }
+
+  async function waitForCondition(fn, timeoutMs, pollMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        if (fn()) return true;
+      } catch (e) {}
+      await sleep(pollMs);
+    }
+    return false;
+  }
+
+  // Determine whether we need a mock LLM server (health-only scenarios can skip).
+  const needsMock = scenarios.some(s => {
+    const title = String(s?.title || '');
+    const given = String(s?.given || '');
+    const when = String(s?.when || '');
+    const expectedChecks = Array.isArray(s?.expected_output_checks) ? s.expected_output_checks : [];
+    const kind = inferScenarioKind({ title, when, expectedChecks });
+    if (kind === 'http_health') return false;
+    // Kill switch can be tested without LLM, but it's harmless to provide it.
+    return kind !== 'unsupported';
+  });
+
+  const mockLLM = needsMock ? await startMockLLMServer() : null;
+
+  try {
+    for (const scenario of scenarios) {
+      const startTime = Date.now();
+      const checks = [];
+      const execution = { kind: 'unknown' };
+      let status = 'passed';
+
+      const title = String(scenario?.title || 'Untitled');
+      const titleLc = title.toLowerCase();
+      const givenText = String(scenario?.given || '');
+      const givenLc = givenText.toLowerCase();
+      const whenText = String(scenario?.when || '');
+      const expected = Array.isArray(scenario?.expected_output_checks) ? scenario.expected_output_checks : [];
+
+      // Structural baseline checks
+      const envExample = path.join(agentDir, '.env.example');
+      checks.push({
+        check: 'Agent module directory exists',
+        result: exists(agentDir),
+        actual: exists(agentDir) ? agentDir : 'missing'
+      });
+      checks.push({
+        check: '.env.example exists',
+        result: exists(envExample),
+        actual: exists(envExample) ? envExample : 'missing'
+      });
+
+      const hasKillSwitch = exists(envExample) && readText(envExample).includes('AGENT_ENABLED');
+      checks.push({
+        check: 'AGENT_ENABLED in .env.example',
+        result: hasKillSwitch,
+        actual: hasKillSwitch ? 'present' : 'missing'
+      });
+      if (!hasKillSwitch) status = 'failed';
+
+      const kind = inferScenarioKind({ title, when: whenText, expectedChecks: expected });
+      execution.kind = kind;
+
+      const attach = Array.isArray(bp.integration?.attach) ? bp.integration.attach : [];
+      const attachSet = new Set(attach);
+
+      // Scenario-level env flags
+      const agentEnabledExplicit = parseExplicitEnvFlag(givenText, 'AGENT_ENABLED');
+      const degraded = parseExplicitEnvFlag(givenText, 'AGENT_DEGRADED') === true;
+
+      const isKillSwitchScenario =
+        (agentEnabledExplicit === false) ||
+        titleLc.includes('kill switch') ||
+        givenLc.includes('agent_enabled=false');
+
+      // Common env for child processes
+      const commonEnv = {
+        AGENT_ENABLED: isKillSwitchScenario ? 'false' : 'true'
+      };
+
+      if (!isKillSwitchScenario && mockLLM) {
+        commonEnv[baseUrlEnv] = mockLLM.baseUrl;
+        commonEnv[apiKeyEnv] = 'test_key';
+      }
+
+      // Ensure temp dirs for this scenario
+      const scenarioDir = path.join(stageEDir, `scenario-${randomId()}`);
+      fs.mkdirSync(scenarioDir, { recursive: true });
+
+      // Route selection: if unsupported, skip (unless structural failures already marked failed).
+      if (kind === 'unsupported') {
+        status = status === 'failed' ? 'failed' : 'skipped';
+        checks.push({
+          check: 'Scenario supported by verify harness',
+          result: false,
+          actual: `Unsupported when="${whenText}"`
+        });
+        results.push({ title, priority: scenario?.priority, status, checks, execution, duration_ms: Date.now() - startTime });
+        continue;
+      }
+
+      // Attachment gating (hard-fail if scenario demands an attach not enabled)
+      if (kind === 'worker' && !attachSet.has('worker')) {
+        status = 'failed';
+        checks.push({ check: 'integration.attach includes worker', result: false, actual: `attach=[${attach.join(',')}]` });
+        results.push({ title, priority: scenario?.priority, status, checks, execution, duration_ms: Date.now() - startTime });
+        continue;
+      }
+      if (kind === 'cron' && !attachSet.has('cron')) {
+        status = 'failed';
+        checks.push({ check: 'integration.attach includes cron', result: false, actual: `attach=[${attach.join(',')}]` });
+        results.push({ title, priority: scenario?.priority, status, checks, execution, duration_ms: Date.now() - startTime });
+        continue;
+      }
+      if (kind === 'pipeline' && !attachSet.has('pipeline')) {
+        status = 'failed';
+        checks.push({ check: 'integration.attach includes pipeline', result: false, actual: `attach=[${attach.join(',')}]` });
+        results.push({ title, priority: scenario?.priority, status, checks, execution, duration_ms: Date.now() - startTime });
+        continue;
+      }
+      if (kind === 'sdk' && !attachSet.has('sdk')) {
+        status = 'failed';
+        checks.push({ check: 'integration.attach includes sdk', result: false, actual: `attach=[${attach.join(',')}]` });
+        results.push({ title, priority: scenario?.priority, status, checks, execution, duration_ms: Date.now() - startTime });
+        continue;
+      }
+
+      // Execute scenario
+      try {
+        // ----------------------------
+        // HTTP server-based scenarios
+        // ----------------------------
+        if (kind === 'http_health' || kind === 'http_run' || kind === 'http_conversation_debug' || kind === 'ws_streaming' || kind === 'sse_streaming') {
+          const port = await findFreePort();
+
+          // Degradation env
+          const env = Object.assign({}, commonEnv);
+          if (degraded) env.AGENT_DEGRADED = 'true';
+
+          // For route_to_worker degradation we must set the worker input dir.
+          const workerInputDirForDegrade = path.join(scenarioDir, 'worker-in');
+          if (degraded) env.AGENT_WORKER_INPUT_DIR = workerInputDirForDegrade;
+
+          // Start agent HTTP server
+          let serverProc = null;
+          let serverLogs = { stdout: '', stderr: '' };
+          try {
+            ({ child: serverProc, logs: serverLogs } = await startAgentHttpServer({
+              agentDir,
+              env: Object.assign(env, { PORT: String(port) }),
+              basePath
+            }));
+
+            // Common request headers (conversation key)
+            const headers = {};
+            if (convHeaderName) headers[convHeaderName] = 'verify-conv';
+            // If scenario asks for additional header-based conversation, include.
+            // (No other header semantics are assumed here.)
+
+            if (kind === 'http_health') {
+              execution.method = 'GET';
+              execution.path = `${basePath}/health`;
+              const r = await httpJson({ method: 'GET', port, path: execution.path, headers, timeoutMs: 3000 });
+              execution.http_status = r.statusCode;
+              execution.response = r.json || r.text;
+              const ok = r.statusCode === 200 && r.json && r.json.status === 'ok';
+              checks.push({ check: 'health returns 200 status=ok', result: ok, actual: `status=${r.statusCode}` });
+              if (!ok) status = 'failed';
+            }
+
+            if (kind === 'http_run') {
+              execution.method = 'POST';
+              execution.path = `${basePath}/run`;
+
+              const requestId = `verify-${randomId()}`;
+              const runRequest = {
+                contract_version: contractVersion,
+                request_id: requestId,
+                conversation_id: 'verify',
+                input: 'hello from verify',
+                context: {},
+                options: { response_mode: 'blocking' }
+              };
+
+              const r = await httpJson({ method: 'POST', port, path: execution.path, headers, body: runRequest, timeoutMs: 8000 });
+              execution.http_status = r.statusCode;
+              execution.response = r.json || r.text;
+
+              // If degraded route_to_worker, expect 202 with queued_file.
+              if (degraded) {
+                const ok = r.statusCode === 202 && r.json && r.json.status === 'queued' && typeof r.json.queued_file === 'string';
+                checks.push({ check: 'degraded route_to_worker returns 202 queued', result: ok, actual: `status=${r.statusCode}` });
+                if (!ok) status = 'failed';
+
+                if (r.json && typeof r.json.queued_file === 'string') {
+                  const queued = r.json.queued_file;
+                  const existsQueued = exists(queued);
+                  checks.push({ check: 'queued_file exists', result: existsQueued, actual: existsQueued ? queued : 'missing' });
+                  if (!existsQueued) status = 'failed';
+                }
+              }
+
+              // Evaluate expected checks (simple DSL)
+              for (const c of expected) {
+                const cLc = String(c).toLowerCase();
+
+                if (cLc.includes('http status')) {
+                  const m = cLc.match(/http status\s*==\s*(\d+)/);
+                  const want = m ? Number(m[1]) : null;
+                  const ok = want ? (r.statusCode === want) : true;
+                  checks.push({ check: c, result: ok, actual: `status=${r.statusCode}` });
+                  if (!ok) status = 'failed';
+                  continue;
+                }
+
+                if (cLc.includes('status == ok')) {
+                  const ok = r.statusCode === 200 && r.json && r.json.status === 'ok';
+                  checks.push({ check: c, result: ok, actual: ok ? 'ok' : `status=${r.statusCode}` });
+                  if (!ok) status = 'failed';
+                  continue;
+                }
+
+                if (cLc.includes('output is non-empty')) {
+                  const out = r.json && typeof r.json.output === 'string' ? r.json.output : '';
+                  const ok = r.statusCode === 200 && out.trim().length > 0;
+                  checks.push({ check: c, result: ok, actual: `len=${out.length}` });
+                  if (!ok) status = 'failed';
+                  continue;
+                }
+
+                if (cLc.includes('contract_version')) {
+                  const got = r.json && r.json.contract_version ? r.json.contract_version : null;
+                  const ok = r.json && r.json.contract_version === contractVersion;
+                  checks.push({ check: c, result: ok, actual: `got=${got} expected=${contractVersion}` });
+                  if (!ok) status = 'failed';
+                  continue;
+                }
+
+                if (cLc.includes('retryable == false')) {
+                  const retryable = r.json && typeof r.json.retryable === 'boolean' ? r.json.retryable : null;
+                  const ok = retryable === false;
+                  checks.push({ check: c, result: ok, actual: `retryable=${retryable}` });
+                  if (!ok) status = 'failed';
+                  continue;
+                }
+
+                if (cLc.includes('queued_file')) {
+                  const q = r.json && r.json.queued_file ? r.json.queued_file : '';
+                  const ok = !!q && exists(q);
+                  checks.push({ check: c, result: ok, actual: ok ? q : 'missing' });
+                  if (!ok) status = 'failed';
+                  continue;
+                }
+
+                checks.push({ check: c, result: true, actual: 'not_evaluated' });
+              }
+
+              // Default checks if none provided
+              if (!expected.length) {
+                const ok = isKillSwitchScenario ? (r.statusCode >= 400) : (r.statusCode === 200);
+                checks.push({ check: 'default result status', result: ok, actual: `http=${r.statusCode}` });
+                if (!ok) status = 'failed';
+              }
+            }
+
+            if (kind === 'http_conversation_debug') {
+              execution.method = 'POST';
+              execution.path = `${basePath}/run`;
+              execution.subkind = 'two_turns_debug';
+
+              const headers2 = Object.assign({}, headers);
+              // If conversation key is configured via header, use a stable value across both turns.
+              if (convHeaderName) headers2[convHeaderName] = 'verify-conv-debug';
+
+              const requestId1 = `verify-${randomId()}`;
+              const req1 = {
+                contract_version: contractVersion,
+                request_id: requestId1,
+                conversation_id: 'verify',
+                input: '__debug_messages__ turn1',
+                context: {},
+                options: { response_mode: 'blocking' }
+              };
+
+              const r1 = await httpJson({ method: 'POST', port, path: execution.path, headers: headers2, body: req1, timeoutMs: 8000 });
+
+              const requestId2 = `verify-${randomId()}`;
+              const req2 = {
+                contract_version: contractVersion,
+                request_id: requestId2,
+                conversation_id: 'verify',
+                input: '__debug_messages__ turn2',
+                context: {},
+                options: { response_mode: 'blocking' }
+              };
+
+              const r2 = await httpJson({ method: 'POST', port, path: execution.path, headers: headers2, body: req2, timeoutMs: 8000 });
+
+              execution.http_status_1 = r1.statusCode;
+              execution.http_status_2 = r2.statusCode;
+              execution.response_1 = r1.json || r1.text;
+              execution.response_2 = r2.json || r2.text;
+
+              // Parse debug payload from output strings.
+              let c1 = null;
+              let c2 = null;
+              try {
+                c1 = safeParseJson(r1.json && r1.json.output ? r1.json.output : '').json;
+              } catch (e) {}
+              try {
+                c2 = safeParseJson(r2.json && r2.json.output ? r2.json.output : '').json;
+              } catch (e) {}
+
+              const n1 = c1 && Number.isInteger(c1.messages_count) ? c1.messages_count : null;
+              const n2 = c2 && Number.isInteger(c2.messages_count) ? c2.messages_count : null;
+
+              checks.push({ check: 'turn1 returns debug payload', result: n1 !== null, actual: `messages_count=${n1}` });
+              checks.push({ check: 'turn2 returns debug payload', result: n2 !== null, actual: `messages_count=${n2}` });
+              if (n1 === null || n2 === null) status = 'failed';
+
+              const increased = (n1 !== null && n2 !== null) ? (n2 > n1) : false;
+              checks.push({ check: 'messages_count increases on second turn', result: increased, actual: `n1=${n1} n2=${n2}` });
+              if (!increased) status = 'failed';
+
+              // Evaluate expected checks
+              for (const c of expected) {
+                const cLc = String(c).toLowerCase();
+                if (cLc.includes('messages_count') && cLc.includes('increase')) {
+                  const ok = increased;
+                  checks.push({ check: c, result: ok, actual: `n1=${n1} n2=${n2}` });
+                  if (!ok) status = 'failed';
+                  continue;
+                }
+                checks.push({ check: c, result: true, actual: 'not_evaluated' });
+              }
+            }
+
+            if (kind === 'ws_streaming') {
+              execution.path = `${basePath}/ws`;
+              execution.protocol = 'websocket';
+
+              // WebSocket requires headers for auth (if any) and conversation (optional).
+              const wsHeaders = Object.assign({}, (convHeaderName ? { [convHeaderName]: 'verify-ws' } : {}));
+
+              const requestId = `verify-${randomId()}`;
+              const runRequest = {
+                contract_version: contractVersion,
+                request_id: requestId,
+                conversation_id: 'verify',
+                input: 'hello ws streaming verify',
+                context: {},
+                options: { response_mode: 'streaming' }
+              };
+
+              const wsRes = await wsSendAndCollectJson({
+                hostname: '127.0.0.1',
+                port,
+                pathname: execution.path,
+                headers: wsHeaders,
+                sendObj: runRequest,
+                timeoutMs: 8000,
+                stopWhen: (evt) => evt && evt.type === 'final' && evt.data && evt.data.response
+              });
+
+              execution.ws_messages = wsRes.messages.slice(0, 200);
+              execution.ws_events = wsRes.jsonEvents.slice(0, 200);
+
+              const hasAny = wsRes.jsonEvents.length > 0;
+              checks.push({ check: 'ws receives at least one event', result: hasAny, actual: `events=${wsRes.jsonEvents.length}` });
+              if (!hasAny) status = 'failed';
+
+              const hasDelta = wsRes.jsonEvents.some(e => e && e.type === 'delta');
+              checks.push({ check: 'ws receives delta events', result: hasDelta, actual: hasDelta ? 'present' : 'missing' });
+              if (!hasDelta) status = 'failed';
+
+              const hasError = wsRes.jsonEvents.some(e => e && e.type === 'error');
+              checks.push({ check: 'ws has no error events', result: !hasError, actual: hasError ? 'error_present' : 'ok' });
+              if (hasError) status = 'failed';
+
+              const finalWithResponse = wsRes.jsonEvents.find(e => e && e.type === 'final' && e.data && e.data.response);
+              const okFinal = finalWithResponse && finalWithResponse.data && finalWithResponse.data.response && finalWithResponse.data.response.status === 'ok';
+              checks.push({ check: 'ws final event contains RunResponse status=ok', result: !!okFinal, actual: okFinal ? 'ok' : 'missing_or_not_ok' });
+              if (!okFinal) status = 'failed';
+
+              // Evaluate expected checks
+              for (const c of expected) {
+                const cLc = String(c).toLowerCase();
+                if (cLc.includes('ws') && cLc.includes('delta')) {
+                  checks.push({ check: c, result: hasDelta, actual: hasDelta ? 'present' : 'missing' });
+                  if (!hasDelta) status = 'failed';
+                  continue;
+                }
+                if (cLc.includes('ws') && cLc.includes('no error')) {
+                  checks.push({ check: c, result: !hasError, actual: hasError ? 'error_present' : 'ok' });
+                  if (hasError) status = 'failed';
+                  continue;
+                }
+                if (cLc.includes('final') && cLc.includes('status') && cLc.includes('ok')) {
+                  checks.push({ check: c, result: !!okFinal, actual: okFinal ? 'ok' : 'missing_or_not_ok' });
+                  if (!okFinal) status = 'failed';
+                  continue;
+                }
+                checks.push({ check: c, result: true, actual: 'not_evaluated' });
+              }
+            }
+
+            // ----------------------------
+            // SSE (Server-Sent Events) streaming scenario
+            // ----------------------------
+            if (kind === 'sse_streaming') {
+              const sseHeaders = Object.assign({}, (convHeaderName ? { [convHeaderName]: 'verify-sse' } : {}));
+              const requestId = `verify-${randomId()}`;
+              const runRequest = {
+                contract_version: contractVersion,
+                request_id: requestId,
+                conversation_id: 'verify',
+                input: 'hello sse streaming verify',
+                options: { response_mode: 'streaming' }
+              };
+
+              const ssePath = `${basePath}/run/stream`;
+              const sseRes = await httpSseCollect({
+                hostname: '127.0.0.1',
+                port,
+                path: ssePath,
+                method: 'POST',
+                headers: sseHeaders,
+                body: runRequest,
+                timeoutMs: 15000
+              });
+
+              execution.sse_response = {
+                statusCode: sseRes.statusCode,
+                events_count: sseRes.events.length,
+                timedOut: !!sseRes.timedOut
+              };
+
+              // Check for delta events
+              const hasDelta = sseRes.events.some(e => e && e.type === 'delta');
+              checks.push({ check: 'SSE delta events received', result: hasDelta, actual: hasDelta ? 'yes' : 'no' });
+              if (!hasDelta) status = 'failed';
+
+              // Check for error events
+              const hasError = sseRes.events.some(e => e && e.type === 'error');
+              checks.push({ check: 'SSE no error events', result: !hasError, actual: hasError ? 'has_error' : 'no_error' });
+              if (hasError) status = 'failed';
+
+              // Check for final event with response
+              const finalWithResponse = sseRes.events.find(e => e && e.type === 'final' && e.data && e.data.response);
+              const okFinal = finalWithResponse && finalWithResponse.data && finalWithResponse.data.response && finalWithResponse.data.response.status === 'ok';
+              checks.push({ check: 'SSE final event with status=ok', result: !!okFinal, actual: okFinal ? 'ok' : 'missing_or_not_ok' });
+              if (!okFinal) status = 'failed';
+
+              // Process expected checks
+              for (const c of expected) {
+                const cLc = c.toLowerCase();
+                if (cLc.includes('sse') && cLc.includes('delta')) {
+                  checks.push({ check: c, result: hasDelta, actual: hasDelta ? 'yes' : 'no' });
+                  if (!hasDelta) status = 'failed';
+                  continue;
+                }
+                if (cLc.includes('sse') && cLc.includes('no error')) {
+                  checks.push({ check: c, result: !hasError, actual: hasError ? 'has_error' : 'no_error' });
+                  if (hasError) status = 'failed';
+                  continue;
+                }
+                if (cLc.includes('final') && cLc.includes('status') && cLc.includes('ok')) {
+                  checks.push({ check: c, result: !!okFinal, actual: okFinal ? 'ok' : 'missing_or_not_ok' });
+                  if (!okFinal) status = 'failed';
+                  continue;
+                }
+                checks.push({ check: c, result: true, actual: 'not_evaluated' });
+              }
+            }
+          } finally {
+            await stopProcess(serverProc);
+            execution.server_stdout_tail = (serverLogs.stdout || '').slice(-2000);
+            execution.server_stderr_tail = (serverLogs.stderr || '').slice(-2000);
+          }
+        }
+
+        // ----------------------------
+        // Pipeline adapter scenario
+        // ----------------------------
+        if (kind === 'pipeline') {
+          const requestId = `verify-${randomId()}`;
+          const runRequest = {
+            contract_version: contractVersion,
+            request_id: requestId,
+            conversation_id: 'verify',
+            input: 'hello from pipeline verify',
+            context: {},
+            options: { response_mode: 'blocking' }
+          };
+
+          const proc = await spawnCapture({
+            command: process.execPath,
+            args: ['src/adapters/pipeline/pipeline.js'],
+            cwd: agentDir,
+            env: commonEnv,
+            stdinText: JSON.stringify(runRequest),
+            timeoutMs: 8000
+          });
+
+          execution.exit_code = proc.exitCode;
+          execution.stdout_tail = String(proc.stdout || '').slice(-2000);
+          execution.stderr_tail = String(proc.stderr || '').slice(-2000);
+          execution.timed_out = proc.timedOut;
+
+          const parsed = safeParseJson(proc.stdout);
+          execution.response = parsed.ok ? parsed.json : proc.stdout;
+
+          const okExit = proc.exitCode === 0 && !proc.timedOut;
+          checks.push({ check: 'pipeline exits with code 0', result: okExit, actual: `exit=${proc.exitCode} timeout=${proc.timedOut}` });
+          if (!okExit) status = 'failed';
+
+          const okStatus = parsed.ok && parsed.json && parsed.json.status === 'ok';
+          checks.push({ check: 'pipeline returns RunResponse status=ok', result: okStatus, actual: okStatus ? 'ok' : 'not_ok' });
+          if (!okStatus) status = 'failed';
+
+          // Evaluate expected checks (re-use common checks)
+          for (const c of expected) {
+            const cLc = String(c).toLowerCase();
+            if (cLc.includes('exit code')) {
+              const m = cLc.match(/exit code\s*==\s*(\d+)/);
+              const want = m ? Number(m[1]) : 0;
+              const ok = proc.exitCode === want;
+              checks.push({ check: c, result: ok, actual: `exit=${proc.exitCode}` });
+              if (!ok) status = 'failed';
+              continue;
+            }
+            if (cLc.includes('status == ok')) {
+              checks.push({ check: c, result: okStatus, actual: okStatus ? 'ok' : 'not_ok' });
+              if (!okStatus) status = 'failed';
+              continue;
+            }
+            if (cLc.includes('output is non-empty')) {
+              const out = parsed.ok && parsed.json && typeof parsed.json.output === 'string' ? parsed.json.output : '';
+              const ok = out.trim().length > 0;
+              checks.push({ check: c, result: ok, actual: `len=${out.length}` });
+              if (!ok) status = 'failed';
+              continue;
+            }
+            checks.push({ check: c, result: true, actual: 'not_evaluated' });
+          }
+        }
+
+        // ----------------------------
+        // Cron adapter scenario
+        // ----------------------------
+        if (kind === 'cron') {
+          const requestId = `verify-${randomId()}`;
+          const runRequest = {
+            contract_version: contractVersion,
+            request_id: requestId,
+            conversation_id: 'verify',
+            input: 'hello from cron verify',
+            context: {},
+            options: { response_mode: 'blocking' }
+          };
+
+          const proc = await spawnCapture({
+            command: process.execPath,
+            args: ['src/adapters/cron/cron.js'],
+            cwd: agentDir,
+            env: Object.assign({}, commonEnv, { AGENT_CRON_INPUT_JSON: JSON.stringify(runRequest) }),
+            stdinText: null,
+            timeoutMs: 8000
+          });
+
+          execution.exit_code = proc.exitCode;
+          execution.stdout_tail = String(proc.stdout || '').slice(-2000);
+          execution.stderr_tail = String(proc.stderr || '').slice(-2000);
+          execution.timed_out = proc.timedOut;
+
+          const parsed = safeParseJson(proc.stdout);
+          execution.response = parsed.ok ? parsed.json : proc.stdout;
+
+          const okExit = proc.exitCode === 0 && !proc.timedOut;
+          checks.push({ check: 'cron exits with code 0', result: okExit, actual: `exit=${proc.exitCode} timeout=${proc.timedOut}` });
+          if (!okExit) status = 'failed';
+
+          const okStatus = parsed.ok && parsed.json && parsed.json.status === 'ok';
+          checks.push({ check: 'cron returns RunResponse status=ok', result: okStatus, actual: okStatus ? 'ok' : 'not_ok' });
+          if (!okStatus) status = 'failed';
+
+          for (const c of expected) {
+            const cLc = String(c).toLowerCase();
+            if (cLc.includes('exit code')) {
+              const m = cLc.match(/exit code\s*==\s*(\d+)/);
+              const want = m ? Number(m[1]) : 0;
+              const ok = proc.exitCode === want;
+              checks.push({ check: c, result: ok, actual: `exit=${proc.exitCode}` });
+              if (!ok) status = 'failed';
+              continue;
+            }
+            if (cLc.includes('status == ok')) {
+              checks.push({ check: c, result: okStatus, actual: okStatus ? 'ok' : 'not_ok' });
+              if (!okStatus) status = 'failed';
+              continue;
+            }
+            if (cLc.includes('output is non-empty')) {
+              const out = parsed.ok && parsed.json && typeof parsed.json.output === 'string' ? parsed.json.output : '';
+              const ok = out.trim().length > 0;
+              checks.push({ check: c, result: ok, actual: `len=${out.length}` });
+              if (!ok) status = 'failed';
+              continue;
+            }
+            checks.push({ check: c, result: true, actual: 'not_evaluated' });
+          }
+        }
+
+        // ----------------------------
+        // Worker adapter scenario
+        // ----------------------------
+        if (kind === 'worker') {
+          const inDir = path.join(scenarioDir, 'worker-in');
+          const outDir = path.join(scenarioDir, 'worker-out');
+          fs.mkdirSync(inDir, { recursive: true });
+          fs.mkdirSync(outDir, { recursive: true });
+
+          const requestId = `verify-${randomId()}`;
+          const runRequest = {
+            contract_version: contractVersion,
+            request_id: requestId,
+            conversation_id: 'verify',
+            input: 'hello from worker verify',
+            context: {},
+            options: { response_mode: 'async' }
+          };
+
+          const inputFile = path.join(inDir, `${requestId}.json`);
+          fs.writeFileSync(inputFile, JSON.stringify(runRequest, null, 2));
+
+          const env = Object.assign({}, commonEnv, {
+            AGENT_WORKER_INPUT_DIR: inDir,
+            AGENT_WORKER_OUTPUT_DIR: outDir,
+            AGENT_WORKER_POLL_MS: '50'
+          });
+
+          const child = spawn(process.execPath, ['src/adapters/worker/worker.js'], {
+            cwd: agentDir,
+            env: Object.assign({}, process.env, env),
+            stdio: ['ignore', 'pipe', 'pipe']
+          });
+
+          const logs = { stdout: '', stderr: '' };
+          child.stdout.on('data', (d) => { logs.stdout += String(d); });
+          child.stderr.on('data', (d) => { logs.stderr += String(d); });
+
+          const outOkFile = path.join(outDir, `${requestId}.out.json`);
+          const outErrFile = path.join(outDir, `${requestId}.error.json`);
+          const doneFile = path.join(inDir, '.done', `${requestId}.json`);
+          const failedFile = path.join(inDir, '.failed', `${requestId}.json`);
+
+          const produced = await waitForCondition(() => exists(outOkFile) || exists(outErrFile), 8000, 50);
+          const moved = await waitForCondition(() => exists(doneFile) || exists(failedFile), 8000, 50);
+
+          await stopProcess(child);
+
+          execution.worker_in = inDir;
+          execution.worker_out = outDir;
+          execution.worker_stdout_tail = (logs.stdout || '').slice(-2000);
+          execution.worker_stderr_tail = (logs.stderr || '').slice(-2000);
+
+          checks.push({ check: 'worker produced an output file', result: produced, actual: produced ? 'produced' : 'timeout' });
+          if (!produced) status = 'failed';
+
+          checks.push({ check: 'worker moved input to .done or .failed', result: moved, actual: moved ? 'moved' : 'timeout' });
+          if (!moved) status = 'failed';
+
+          let outObj = null;
+          if (exists(outOkFile)) {
+            outObj = readJson(outOkFile);
+            execution.output_file = outOkFile;
+          } else if (exists(outErrFile)) {
+            outObj = readJson(outErrFile);
+            execution.output_file = outErrFile;
+          }
+          execution.response = outObj;
+
+          const okStatus = outObj && outObj.status === 'ok';
+          checks.push({ check: 'worker output has status=ok', result: !!okStatus, actual: okStatus ? 'ok' : 'not_ok' });
+          if (!okStatus) status = 'failed';
+
+          for (const c of expected) {
+            const cLc = String(c).toLowerCase();
+            if (cLc.includes('status == ok')) {
+              checks.push({ check: c, result: !!okStatus, actual: okStatus ? 'ok' : 'not_ok' });
+              if (!okStatus) status = 'failed';
+              continue;
+            }
+            if (cLc.includes('.done')) {
+              const ok = exists(doneFile);
+              checks.push({ check: c, result: ok, actual: ok ? 'moved_to_done' : 'not_in_done' });
+              if (!ok) status = 'failed';
+              continue;
+            }
+            if (cLc.includes('output file')) {
+              const ok = exists(outOkFile) || exists(outErrFile);
+              checks.push({ check: c, result: ok, actual: ok ? execution.output_file : 'missing' });
+              if (!ok) status = 'failed';
+              continue;
+            }
+            checks.push({ check: c, result: true, actual: 'not_evaluated' });
+          }
+        }
+
+        // ----------------------------
+        // SDK adapter scenario
+        // ----------------------------
+        if (kind === 'sdk') {
+          const requestId = `verify-${randomId()}`;
+          const runRequest = {
+            contract_version: contractVersion,
+            request_id: requestId,
+            conversation_id: 'verify',
+            input: 'hello from sdk verify',
+            context: {},
+            options: { response_mode: 'blocking' }
+          };
+
+          const sdkScript = path.join(scenarioDir, 'sdk-test.js');
+          writeText(sdkScript, `
+const path = require('path');
+(async () => {
+  const reqTxt = process.env.SDK_TEST_REQUEST_JSON || '{}';
+  const req = JSON.parse(reqTxt);
+  const sdk = require(path.join(process.cwd(), 'src', 'adapters', 'sdk'));
+  const result = await sdk.runAgent(req, { responseMode: 'blocking' });
+  const out = result.ok ? result.response : result.error;
+  process.stdout.write(JSON.stringify(out));
+  process.exit(result.ok ? 0 : 1);
+})().catch((e) => { process.stderr.write(String(e && e.message ? e.message : e)); process.exit(1); });
+          `.trim() + '\n');
+
+          const proc = await spawnCapture({
+            command: process.execPath,
+            args: [sdkScript],
+            cwd: agentDir,
+            env: Object.assign({}, commonEnv, { SDK_TEST_REQUEST_JSON: JSON.stringify(runRequest) }),
+            stdinText: null,
+            timeoutMs: 8000
+          });
+
+          execution.exit_code = proc.exitCode;
+          execution.stdout_tail = String(proc.stdout || '').slice(-2000);
+          execution.stderr_tail = String(proc.stderr || '').slice(-2000);
+          execution.timed_out = proc.timedOut;
+
+          const parsed = safeParseJson(proc.stdout);
+          execution.response = parsed.ok ? parsed.json : proc.stdout;
+
+          const okExit = proc.exitCode === 0 && !proc.timedOut;
+          checks.push({ check: 'sdk test exits with code 0', result: okExit, actual: `exit=${proc.exitCode} timeout=${proc.timedOut}` });
+          if (!okExit) status = 'failed';
+
+          const okStatus = parsed.ok && parsed.json && parsed.json.status === 'ok';
+          checks.push({ check: 'sdk returns RunResponse status=ok', result: okStatus, actual: okStatus ? 'ok' : 'not_ok' });
+          if (!okStatus) status = 'failed';
+
+          for (const c of expected) {
+            const cLc = String(c).toLowerCase();
+            if (cLc.includes('status == ok')) {
+              checks.push({ check: c, result: okStatus, actual: okStatus ? 'ok' : 'not_ok' });
+              if (!okStatus) status = 'failed';
+              continue;
+            }
+            if (cLc.includes('output is non-empty')) {
+              const out = parsed.ok && parsed.json && typeof parsed.json.output === 'string' ? parsed.json.output : '';
+              const ok = out.trim().length > 0;
+              checks.push({ check: c, result: ok, actual: `len=${out.length}` });
+              if (!ok) status = 'failed';
+              continue;
+            }
+            checks.push({ check: c, result: true, actual: 'not_evaluated' });
+          }
+        }
+      } catch (e) {
+        status = 'failed';
+        execution.error = String(e && e.message ? e.message : e);
+      }
+
+      results.push({
+        title,
+        priority: scenario?.priority,
+        status,
+        checks,
+        execution,
+        duration_ms: Date.now() - startTime
+      });
+    }
+  } finally {
+    if (mockLLM) await mockLLM.close();
+  }
+
+  // Calculate summary
+  const summary = {
+    total: results.length,
+    passed: results.filter(r => r.status === 'passed').length,
+    failed: results.filter(r => r.status === 'failed').length,
+    skipped: results.filter(r => r.status === 'skipped').length
+  };
+
+  // Build evidence object
+  const evidence = {
+    agent_id: bp.agent.id,
+    agent_name: bp.agent.name,
+    verified_at: verifiedAt,
+    repo_root: repoRoot,
+    agent_module_path: bp.deliverables.agent_module_path,
+    scenarios: results,
+    summary
+  };
+
+  // Write JSON evidence
+  const evidencePath = path.join(stageEDir, 'verification-evidence.json');
+  writeJson(evidencePath, evidence);
+
+  // Generate Markdown report
+  const reportLines = [];
+  reportLines.push(`# ${bp.agent.name} Verification Report`);
+  reportLines.push('');
+  reportLines.push('## Summary');
+  reportLines.push('');
+  reportLines.push(`- **Agent ID**: ${bp.agent.id}`);
+  reportLines.push(`- **Verified At**: ${verifiedAt}`);
+  reportLines.push(`- **Total Scenarios**: ${summary.total}`);
+  reportLines.push(`- **Passed**: ${summary.passed}`);
+  reportLines.push(`- **Failed**: ${summary.failed}`);
+  reportLines.push(`- **Skipped**: ${summary.skipped}`);
+  reportLines.push('');
+  reportLines.push(`**Result**: ${summary.failed === 0 ? 'PASS' : 'FAIL'}`);
+  reportLines.push('');
+  reportLines.push('## Scenario Details');
+  reportLines.push('');
+
+  for (const r of results) {
+    const icon = r.status === 'passed' ? '[PASS]' : r.status === 'failed' ? '[FAIL]' : '[SKIP]';
+    reportLines.push(`### ${icon} ${r.title} (${r.priority})`);
+    reportLines.push('');
+    reportLines.push(`- Status: **${r.status}**`);
+    reportLines.push(`- Duration: ${r.duration_ms}ms`);
+    reportLines.push(`- Kind: ${r.execution && r.execution.kind ? r.execution.kind : ''}`);
+    reportLines.push('');
+    if (r.checks.length > 0) {
+      reportLines.push('**Checks**:');
+      reportLines.push('');
+      reportLines.push('| Check | Result | Actual |');
+      reportLines.push('|-------|--------|--------|');
+      for (const c of r.checks) {
+        const checkIcon = c.result ? 'PASS' : 'FAIL';
+        reportLines.push(`| ${c.check} | ${checkIcon} | ${c.actual} |`);
+      }
+      reportLines.push('');
+    }
+  }
+
+  reportLines.push('---');
+  reportLines.push('');
+  reportLines.push('*Generated by agent-builder.js verify command*');
+
+  const reportPath = path.join(stageEDir, 'verification-report.md');
+  writeText(reportPath, reportLines.join('\n'));
+
+  // Also copy to docs directory if it exists
+  if (exists(docsDir)) {
+    writeJson(path.join(docsDir, 'verification-evidence.json'), evidence);
+    writeText(path.join(docsDir, 'verification-report.md'), reportLines.join('\n'));
+  }
+
+  // Update state
+  state.stageE = state.stageE || {};
+  state.stageE.verified = true;
+  state.stageE.verified_at = verifiedAt;
+  state.stageE.evidence_path = evidencePath;
+  state.stageE.report_path = reportPath;
+  state.stageE.summary = summary;
+  state.stage = 'E';
+  addHistory(state, 'verify', {
+    total: summary.total,
+    passed: summary.passed,
+    failed: summary.failed
+  });
+  saveState(workdir, state);
+
+  // Output
+  if (fmt === 'json') {
+    console.log(JSON.stringify(evidence, null, 2));
+  } else {
+    console.log(`Verification ${summary.failed === 0 ? 'PASSED' : 'FAILED'}`);
+    console.log(`  Total: ${summary.total}, Passed: ${summary.passed}, Failed: ${summary.failed}, Skipped: ${summary.skipped}`);
+    console.log('');
+    for (const r of results) {
+      const icon = r.status === 'passed' ? '[PASS]' : r.status === 'failed' ? '[FAIL]' : '[SKIP]';
+      console.log(`  ${icon} ${r.title} (${r.priority})`);
+    }
+    console.log('');
+    console.log(`Evidence: ${evidencePath}`);
+    console.log(`Report: ${reportPath}`);
+    if (exists(docsDir)) {
+      console.log(`Also copied to: ${docsDir}`);
+    }
+  }
+
+  process.exit(summary.failed === 0 ? 0 : 1);
+}
+
+function commandFinish(args) {
+  const workdir = getWorkdir(args);
+  ensureWorkdir(workdir);
+  const apply = !!args.apply;
+
+  if (!isTempWorkdir(workdir)) {
+    die(`Refusing to delete non-temp workdir: ${workdir}\nExpected under OS temp dir and containing /agent_builder/.`);
+  }
+
+  if (!apply) {
+    console.log(`Dry-run: would delete ${workdir}`);
+    console.log('Re-run with --apply to actually delete.');
     return;
   }
 
-  const safe = isSafeTempWorkdir(workdir);
-  if (!safe && !force) {
-    console.error('Refusing to delete a non-default workdir path without --force.');
-    console.error(`workdir: ${workdir}`);
-    process.exit(2);
-  }
-
-  removeDirRecursive(workdir);
+  fs.rmSync(workdir, { recursive: true, force: true });
   console.log(`Deleted workdir: ${workdir}`);
 }
 
-function usage() {
-  console.log('agent_builder helper');
-  console.log('');
-  console.log('Commands:');
-  console.log('  start [--workdir <dir>]');
-  console.log('  status --workdir <dir>');
-  console.log('  approve --workdir <dir> --stage <A|B|C|D|E>');
-  console.log('  validate-blueprint --workdir <dir> [--blueprint <path>] [--format json|text]');
-  console.log('  plan --workdir <dir> --repo-root <repo>');
-  console.log('  apply --workdir <dir> --repo-root <repo> --apply');
-  console.log('  finish --workdir <dir> [--force]');
-  console.log('');
-}
-
 function main() {
-  const argv = process.argv.slice(2);
-  const cmd = argv[0];
-  const args = parseArgs(argv.slice(1));
+  const args = parseArgs(process.argv);
+  const cmd = args._[0];
+  if (!cmd || cmd === '-h' || cmd === '--help') usage(0);
 
-  switch (cmd) {
-    case 'start': return cmdStart(args);
-    case 'status': return cmdStatus(args);
-    case 'approve': return cmdApprove(args);
-    case 'validate-blueprint': return cmdValidateBlueprint(args);
-    case 'plan': return cmdPlan(args);
-    case 'apply': return cmdApply(args);
-    case 'finish': return cmdFinish(args);
-    default:
-      usage();
-      process.exit(cmd ? 2 : 0);
+  if (cmd === 'start') return commandStart(args);
+  if (cmd === 'status') return commandStatus(args);
+  if (cmd === 'approve') return commandApprove(args);
+  if (cmd === 'validate-blueprint') return commandValidateBlueprint(args);
+  if (cmd === 'plan') return commandPlan(args);
+  if (cmd === 'apply') return commandApply(args);
+  if (cmd === 'verify') {
+    return commandVerify(args).catch((e) => {
+      console.error(`Verify failed: ${String(e && e.message ? e.message : e)}`);
+      process.exit(1);
+    });
   }
+  if (cmd === 'finish') return commandFinish(args);
+
+  usage(1);
 }
 
 main();

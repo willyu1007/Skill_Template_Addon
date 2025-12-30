@@ -1,352 +1,438 @@
-# `agent_builder` Usage Guide
+# Agent Builder Reference Handbook
 
-This document explains how to use the `agent_builder` skill pack to produce a **complete, repo-integrated Agent** (configuration + runnable adapters + prompt pack + docs + registry entry).
-
-> This guide is written for humans who will run the helper script and/or review generated artifacts, LLM readers can skip it.
-> In practice, an LLM agent can follow the same steps programmatically while building an agent for a concrete requirement.
+This handbook provides design principles, decision trees, boundary conditions, and common patterns for building production-embedded agents. It is intended as a reference for LLMs executing the `agent_builder` skill.
 
 ---
 
-## 1. Primary use cases
+## 1. Design Principles
 
-`agent_builder` is designed for real production embedding. In v1, the default shape is:
+### 1.1 Core vs Adapters Separation
 
-- **Primary embedding**: `API` (HTTP)
-- **Attach candidates (implemented in this version)**:
-  - `worker` (async processing / background execution)
-  - `sdk` (in-process library usage)
-  - `cron` (scheduled invocation)
-  - `pipeline` (CI / ETL / pipeline step invocation)
+**Principle**: Business logic must be isolated from integration concerns.
 
-A common embedding point is an **API interface call** (yes, API calls are supported and are the default primary embedding).
-
----
-
-## 2. What gets generated
-
-Given an approved blueprint, `agent_builder` generates:
-
-### 2.1 Agent module (runnable)
-
-Under `deliverables.agent_module_path` (default example: `agents/<agent_id>`):
-
-- `src/core/`  
-  Provider-agnostic agent logic. This must be stable and testable.
-- `src/adapters/`  
-  Entrypoints for `http`, `worker`, `sdk`, `cron`, `pipeline`.
-- `prompts/`  
-  Tiered prompt pack selected by complexity tier.
-- `schemas/`  
-  JSON schema files for RunRequest / RunResponse / AgentError.
-- `config/default.json`  
-  Non-secret runtime defaults.
-- `.env.example`  
-  Example environment variable list.
-
-### 2.2 Project documentation (maintainability)
-
-Under `deliverables.docs_path` (default example: `agents/<agent_id>`):
-
-- `doc/overview.md`
-- `doc/integration.md`
-- `doc/configuration.md`
-- `doc/dataflow.md`
-- `doc/runbook.md`
-- `doc/evaluation.md`
-
-### 2.3 Agent registry update
-
-`deliverables.registry_path` (default example: `agents/registry.json`) is created or updated.
-
-This registry is the project’s **single place** to discover:
-- What agents exist
-- Where they live (module path)
-- How to invoke them
-- Owners and operational notes
-
----
-
-## 3. Staged execution flow (A–E)
-
-### Stage A — Interview (temporary workdir only)
-
-**Rule:** During Stage A, do not write anything to the repo.
-
-Artifacts live in a temporary workdir and are deleted at the end.
-
-Outputs:
-- `stageA/interview-notes.md`
-- `stageA/integration-decision.md`
-
-Checkpoint:
-- The user must explicitly approve:
-  - embedding target (where the agent runs)
-  - upstream/downstream contracts
-  - failure contract
-  - rollback/disable plan
-
-### Stage B — Blueprint (JSON)
-
-Create a blueprint (`stageB/agent-blueprint.json`) that is compatible with the schema:
-- `templates/agent-blueprint.schema.json`
-
-Checkpoint:
-- The user must explicitly approve the blueprint before scaffolding.
-
-### Stage C — Scaffold (repo writes)
-
-Generate code, prompts, docs, registry updates in the repo:
-- No overwrites
-- Core/adapters separation enforced
-- Registry must be updated
-
-### Stage D — Implement
-
-Implement the actual business logic (agent tools, domain logic, integration logic) in `src/core/` and real tools.
-
-### Stage E — Verify + Docs + Cleanup
-
-- Verify acceptance scenarios
-- Ensure docs and registry are correct
-- Delete the temporary workdir
-
----
-
-## 4. Helper script: `scripts/agent-builder.js`
-
-The helper script is dependency-free (Node.js only).
-
-Path:
-- `.ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js`
-
-### 4.1 Commands overview
-
-| Command | Purpose |
-|--------|---------|
-| `start` | Create a temporary workdir and initial state + Stage A/B templates |
-| `status` | Show current run state and next suggested action |
-| `validate-blueprint` | Validate a blueprint JSON for required fields, enums, and constraints |
-| `plan` | Show what files would be generated/updated (dry-run) |
-| `apply` | Apply the scaffold into the repo (requires `--apply`) |
-| `finish` | Delete the temporary workdir (auto-safe for default temp paths) |
-
-### 4.2 Quickstart (manual)
-
-From your repo root:
-
-```bash
-# 1) Start a new run (creates a temp workdir)
-node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js start
-
-# 2) Open the printed workdir path and fill Stage A artifacts:
-#    - stageA/interview-notes.md
-#    - stageA/integration-decision.md
-
-# 3) Draft the blueprint in:
-#    - stageB/agent-blueprint.json
-# (use the example files in templates/ as guidance)
-
-# 4) Validate the blueprint
-node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js validate-blueprint --workdir <WORKDIR>
-
-# 5) Plan scaffold changes (dry-run)
-node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js plan --workdir <WORKDIR> --repo-root .
-
-# 6) Apply scaffold changes
-node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js apply --workdir <WORKDIR> --repo-root . --apply
-
-# 7) Finish (cleanup workdir)
-node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js finish --workdir <WORKDIR>
 ```
---- 
+agents/<agent_id>/
+├── src/
+│   ├── core/           # Provider-agnostic logic
+│   │   ├── run.js      # Main orchestration
+│   │   ├── tools.js    # Tool implementations
+│   │   ├── prompts.js  # Prompt loading
+│   │   ├── conversation.js  # Memory management
+│   │   ├── contracts.js     # Schema validation
+│   │   └── errors.js        # Error types
+│   │
+│   └── adapters/       # Integration-specific code
+│       ├── http/       # HTTP + WebSocket server
+│       ├── worker/     # Async job processing
+│       ├── sdk/        # In-process API
+│       ├── cron/       # Scheduled execution
+│       └── pipeline/   # CI/ETL integration
+```
 
-## 5. Blueprint schema
+**Why**: 
+- Core logic can be tested independently of adapters.
+- New adapters can be added without modifying core.
+- Provider changes (e.g., switching LLM providers) affect only specific modules.
 
-The canonical schema is:
-- templates/agent-blueprint.schema.json
+**Enforcement**: `deliverables.core_adapter_separation` must be `"required"` in blueprint.
 
-This guide summarizes key required fields, optional sections, and implemented enums.
+### 1.2 Blueprint as Single Source of Truth
 
-### 5.1 Top-level required fields
+**Principle**: The blueprint JSON captures all architectural decisions and drives code generation.
 
-| **Field** | **Required** |  **Notes**|
-|--|--| -- |
-| kind | Yes | Must be agent_blueprint |
-| version | Yes | Integer ≥ 1 |
-| meta | Yes | Generation metadata |
-| agent | Yes | id, name, summary, owners |
-| scope | Yes | In-scope / out-of-scope / DoD |
-| integration | Yes | Primary + attachments + contracts + failure/rollback |
-| interfaces | Yes | Entrypoints and contract refs |
-| schemas | Yes | Must include RunRequest, RunResponse, AgentError |
-| model | Yes | Primary model selection |
-| configuration | Yes | Env var list (no secrets in repo) |
-| acceptance | Yes | ≥ 2 scenarios |
-| deliverables | Yes |  Where to write code, docs, registry|
+**Benefits**:
+- Deterministic scaffold generation
+- Machine-readable contract for validation
+- Version-controlled configuration
+- Self-documenting architecture
 
-### 5.2 Enum reference (naming + values)
+**Required Blueprint Blocks**:
+```
+kind, version, meta, agent, scope, integration, interfaces, api,
+schemas, contracts, model, configuration, conversation, budgets,
+data_flow, observability, security, acceptance, deliverables
+```
 
-These enums are enforced by validation and/or schema.
+### 1.3 Five-Stage Flow Rationale
 
-integration.primary
-- api (v1 supports api as the primary embedding)
+| Stage | Purpose | Reversibility |
+|-------|---------|---------------|
+| A (Interview) | Capture decisions without commitment | Full (temp workdir) |
+| B (Blueprint) | Encode and validate decisions | Full (temp workdir) |
+| C (Scaffold) | Generate initial structure | Partial (no overwrite) |
+| D (Implement) | Fill in real logic | Incremental |
+| E (Verify) | Prove correctness | N/A |
 
-integration.attach[]
-- worker
-- sdk
-- cron
-- pipeline
+**Why Explicit Approvals**: Prevents costly mistakes. Stages A and B are in temp workdir, so errors are cheap. Stage C writes to repo, so approval ensures user commitment.
 
-integration.trigger.kind
-- sync_request
-- async_event
-- scheduled
-- manual
-- batch
+### 1.4 No Secrets in Repo
 
-integration.target.kind
-- service
-- repo_module
-- pipeline_step
-- queue
-- topic
-- job
-- function
-- other
+**Principle**: Environment variable names and placeholders only.
 
-integration.failure_contract.mode
-Important: suppression is not allowed.
-- propagate_error
-- return_fallback
-- enqueue_retry
+**Correct**:
+```json
+{
+  "name": "LLM_API_KEY",
+  "description": "API key for the LLM provider.",
+  "required": true,
+  "sensitivity": "secret",
+  "example_placeholder": "<set-in-secret-store>"
+}
+```
 
-integration.rollback_or_disable.method
-- feature_flag
-- config_toggle
-- route_switch
-- deployment_rollback
-
-interfaces[].type
-- http
-- worker
-- sdk
-- cron
-- pipeline
-- cli
-
-API route names (fixed)
-- api.routes[].name must be one of:
-  - run
-  - health
-
-The api.routes array must include both run and health.
-
-### 5.3 Conditional required blocks
-
-If you include an attach type, its config block becomes required:
-
-| **Attach** | **Required block** |  
-|--|--| 
-| worker | worker | 
-| sdk | sdk | 
-| cron | cron | 
-| pipeline | pipeline | 
-
---- 
-
-## 6. Generated adapter behavior
-
-### 6.1 HTTP adapter
-- GET <base_path>/health → 200 { status: "ok" }
-- POST <base_path>/run → 200 RunResponse on success
-
-Errors:
-- 503 AgentError when agent disabled
-- 500 AgentError otherwise
-
-### 6.2 Worker adapter (dev default)
-
-Implements a file-queue worker:
-- Reads *.json from AGENT_WORKER_INPUT_DIR
-- Writes *.out.json or *.error.json to AGENT_WORKER_OUTPUT_DIR
-- Moves processed files to .done / .failed
-
-This is a production-friendly pattern only as a placeholder. Replace the source with your real queue/topic/task system.
-
-### 6.3 Cron adapter
-- Reads RunRequest from:
-  - AGENT_CRON_INPUT_JSON (preferred)
-  - or AGENT_CRON_INPUT_FILE
-- Writes output to:
-  - AGENT_CRON_OUTPUT_FILE if provided
-  - otherwise stdout
-
-### 6.4 Pipeline adapter
-- Reads RunRequest JSON from stdin (or --input <file>)
-- Writes RunResponse JSON to stdout (or --output <file>)
-- Exit code 1 on error (writes AgentError to stderr)
-
-### 6.5 SDK adapter
-
-Exports runAgent() for in-process usage.
+**Incorrect**:
+```json
+{
+  "name": "LLM_API_KEY",
+  "value": "sk-abc123..."
+}
+```
 
 ---
 
-## 7. Implementation logic
+## 2. Decision Trees
 
-When apply runs:
-1.	Blueprint is validated (structural + enum + key constraints).
-2.	The agent module folder is created (no overwrite).
-3.	Core and selected adapters are written from templates/agent-kit/node/layout/.
-4.	Prompt pack tier is copied from templates/prompt-pack/<tier>/.
-5.	schemas/*.schema.json are written from blueprint.schemas.
-6.	Docs are generated under deliverables.docs_path.
-7.	Registry JSON is created/updated under deliverables.registry_path.
+### 2.1 Integration Type Selection
 
-The generator follows a strict rule:
-- If a file already exists, it is not overwritten (it is reported as skipped).
+```
+User Request
+    │
+    ├─ "I need an API endpoint" ─────────────────────► primary: api
+    │
+    ├─ "Background processing needed?"
+    │   ├─ Yes, async jobs ──────────────────────────► attach: [worker]
+    │   ├─ Yes, scheduled tasks ─────────────────────► attach: [cron]
+    │   └─ No ───────────────────────────────────────► attach: []
+    │
+    ├─ "Will it be called from other code directly?"
+    │   ├─ Yes, same process ────────────────────────► attach: [sdk]
+    │   └─ No ───────────────────────────────────────► (no sdk)
+    │
+    └─ "Part of a CI/ETL pipeline?"
+        ├─ Yes ──────────────────────────────────────► attach: [pipeline]
+        └─ No ───────────────────────────────────────► (no pipeline)
+```
+
+### 2.2 Conversation Mode Selection
+
+```
+Does the agent need to remember previous turns?
+    │
+    ├─ No ───────────────────────────────────────────► mode: no-need
+    │
+    └─ Yes
+        │
+        ├─ How much history?
+        │   │
+        │   ├─ All turns (small conversations) ──────► mode: buffer
+        │   │
+        │   ├─ Last N turns only ────────────────────► mode: buffer_window
+        │   │
+        │   ├─ Summarized history only ──────────────► mode: summary
+        │   │
+        │   └─ Summary + recent window ──────────────► mode: summary_buffer
+        │
+        └─ Storage requirements?
+            │
+            ├─ Ephemeral (single session) ───────────► storage.kind: in_memory
+            ├─ Persistent across restarts ───────────► storage.kind: file | kv_store
+            └─ Multi-instance / distributed ─────────► storage.kind: database
+```
+
+**Summary Mode Timing Decision**:
+```
+Is the interface interactive (streaming)?
+    │
+    ├─ Yes ──────────────────────► update_timing: async_post_turn
+    │                               (don't block user waiting for summary)
+    │
+    └─ No (blocking) ────────────► update_timing: after_turn
+                                   (summary complete before response)
+```
+
+### 2.3 Failure Handling Strategy
+
+```
+What should happen when the agent fails?
+    │
+    ├─ Caller handles retry logic ───────────────────► mode: propagate_error
+    │   (Return structured error with retryable hint)
+    │
+    ├─ Return safe default / cached response ────────► mode: return_fallback
+    │   (Requires fallback_value definition)
+    │
+    └─ Enqueue for later processing ─────────────────► mode: enqueue_retry
+        (Requires worker attachment)
+
+⚠️ NEVER use: suppress_and_alert (explicitly disallowed)
+```
+
+### 2.4 Response Mode Selection
+
+```
+What response style does the caller expect?
+    │
+    ├─ Wait for complete response ───────────────────► response_mode: blocking
+    │   (Simple, good for short operations)
+    │
+    ├─ Stream tokens/progress as generated ──────────► response_mode: streaming
+    │   (Better UX for long operations)
+    │   │
+    │   └─ Streaming protocol?
+    │       ├─ Web browser ──────────────────────────► protocol: websocket | sse
+    │       └─ Server-to-server ─────────────────────► protocol: chunked_jsonl
+    │
+    └─ Fire-and-forget, poll for result ─────────────► response_mode: async
+        (Best for very long operations, requires worker)
+```
 
 ---
 
-## 8. Operational and maintenance guidance
+## 3. Boundary Conditions
 
-### 8.1 No secrets in repo
+### 3.1 Blueprint Validation Rules
 
-The blueprint requires configuration.env_vars[] as the canonical list.
-- sensitivity: secret must always remain out of the repo.
-- Use .env.example placeholders only.
+| Field | Constraint | Error if Violated |
+|-------|------------|-------------------|
+| `kind` | Must be `"agent_blueprint"` | Invalid blueprint kind |
+| `version` | Integer >= 1 | Invalid version |
+| `integration.primary` | Must be `"api"` | Only API primary supported |
+| `integration.attach[]` | Only `worker\|sdk\|cron\|pipeline` | Unknown attach type |
+| `integration.failure_contract.mode` | No `suppress_and_alert` | Suppression not allowed |
+| `api.routes[]` | Must include `run` and `health` | Missing required routes |
+| `configuration.env_vars[]` | Must include `AGENT_ENABLED` | Kill switch required |
+| `acceptance.scenarios[]` | Minimum 2 scenarios | Insufficient acceptance criteria |
+| `deliverables.core_adapter_separation` | Must be `"required"` | Core/adapter separation required |
 
-### 8.2 Data flow documentation is mandatory
+### 3.2 Schema Version Compatibility
 
-Generated docs include dataflow.md.
-You should extend it to:
-- Document data classes (PII / confidential / internal)
-- Explain what is sent to the LLM provider
-- nclude retention rules for logs/artifacts
+**Contract Version Flow**:
+```
+Request                              Response
+────────────────────────────────────────────────────────────────
+{ contract_version: "1.0.0", ... }  →  { contract_version: "1.0.0", ... }
+```
 
-### 8.3 Kill switch required
+**Compatibility Policy Options**:
+- `strict`: Request version must exactly match agent version.
+- `additive_only`: New fields may be added, none removed.
+- `backward_compatible`: Old clients continue to work.
 
-AGENT_ENABLED is required to support safe rollback/disable.
+**Deprecation Window**: When changing schemas, old versions remain valid for `contracts.deprecation_window_days`.
+
+### 3.3 Kill Switch Behavior
+
+When `AGENT_ENABLED` is `false` or missing:
+
+| Adapter | Expected Behavior |
+|---------|-------------------|
+| HTTP | Return 503 with `AgentError { code: "agent_disabled", retryable: false }` |
+| Worker | Skip job, log warning, do not process |
+| SDK | Throw `AgentDisabledError` |
+| Cron | Exit 0 with log message |
+| Pipeline | Exit 1 with stderr message |
+
+### 3.4 Tool Side Effect Boundaries
+
+| Policy | Read-Only Tools | Write Tools | Destructive Tools |
+|--------|-----------------|-------------|-------------------|
+| `read_only_only` | ✅ Allowed | ❌ Error | ❌ Error |
+| `writes_require_approval` | ✅ Allowed | ⚠️ Approval Required | ⚠️ Approval Required |
+| `writes_allowed` | ✅ Allowed | ✅ Allowed | ✅ Allowed |
 
 ---
 
-## 9. Extending / customizing agent_builder
+## 4. Common Patterns
 
-Typical extensions:
-- Add new adapter templates under templates/agent-kit/
-- Add more tier templates or scenario-specific prompt packs
-- Expand blueprint schema for additional platforms/integrations
+### 4.1 Pure API Agent (Minimal)
 
-When you add new templates, keep the Core vs Adapters boundary intact.
+**Use Case**: Simple request-response agent, no state, no tools.
+
+```json
+{
+  "integration": {
+    "primary": "api",
+    "attach": []
+  },
+  "conversation": {
+    "mode": "no-need"
+  },
+  "tools": {
+    "tools": []
+  }
+}
+```
+
+**Characteristics**:
+- Stateless
+- Fast startup
+- Minimal resource usage
+- Single HTTP adapter
+
+### 4.2 API + Worker Async Pattern
+
+**Use Case**: Long-running tasks with immediate acknowledgment.
+
+```json
+{
+  "integration": {
+    "primary": "api",
+    "attach": ["worker"]
+  },
+  "api": {
+    "degradation": {
+      "mode": "route_to_worker"
+    }
+  },
+  "worker": {
+    "source": { "kind": "queue", "name": "agent-tasks" },
+    "execution": { "max_concurrency": 5, "timeout_ms": 300000 }
+  }
+}
+```
+
+**Flow**:
+1. HTTP receives request
+2. If overloaded or long task, enqueue to worker
+3. Return 202 Accepted with task ID
+4. Worker processes asynchronously
+5. Result stored for polling or callback
+
+### 4.3 Conversational Agent (Summary Buffer)
+
+**Use Case**: Multi-turn chat with long conversation support.
+
+```json
+{
+  "conversation": {
+    "mode": "summary_buffer",
+    "scope": "per_conversation",
+    "storage": { "kind": "database" },
+    "summary": {
+      "update_method": "llm",
+      "refresh_policy": "threshold",
+      "update_timing": "async_post_turn",
+      "threshold": {
+        "max_tokens_since_update": 2000,
+        "max_turns_since_update": 10
+      }
+    },
+    "summary_buffer": {
+      "window_turns": 5,
+      "window_tokens": 1500
+    }
+  }
+}
+```
+
+**Memory Strategy**:
+- Keep last 5 turns in raw form (immediate context)
+- Older turns compressed into running summary
+- Summary updated asynchronously to avoid blocking
+- Token-first threshold (update when raw exceeds 2000 tokens)
+
+### 4.4 Tool-Heavy Agent (with Approval Flow)
+
+**Use Case**: Agent that performs external actions requiring human oversight.
+
+```json
+{
+  "security": {
+    "side_effect_policy": "writes_require_approval",
+    "approvals": [{
+      "id": "write_approval",
+      "mode": "human_required",
+      "applies_to": {
+        "side_effect_level": ["write", "destructive"]
+      }
+    }]
+  },
+  "tools": {
+    "tools": [
+      {
+        "id": "search_database",
+        "side_effect_level": "read_only"
+      },
+      {
+        "id": "update_record",
+        "side_effect_level": "write"
+      }
+    ]
+  }
+}
+```
+
+**Approval Flow**:
+1. Agent decides to call `update_record`
+2. Tool execution returns `approval_required` error
+3. Host workflow presents to human for approval
+4. If approved, retry with approval token
+5. Tool executes with audit log
+
+### 4.5 Multi-Tenant Agent
+
+**Use Case**: Single agent instance serving multiple isolated tenants.
+
+```json
+{
+  "conversation": {
+    "mode": "buffer_window",
+    "scope": "per_tenant",
+    "key": {
+      "source": "header",
+      "name": "x-tenant-id"
+    },
+    "storage": { "kind": "database" },
+    "retention": {
+      "ttl_seconds": 604800,
+      "max_items": 10000
+    }
+  },
+  "data_flow": {
+    "data_classes": ["confidential"],
+    "llm_egress": {
+      "what_is_sent": "Tenant-scoped data only, no cross-tenant leakage",
+      "redaction": "strict"
+    }
+  }
+}
+```
+
+**Isolation Guarantees**:
+- Conversation state keyed by tenant ID
+- Strict redaction to prevent data leakage
+- TTL ensures cleanup of inactive tenants
+- Audit logs include tenant context
 
 ---
 
-## 10. File list (where to look)
-- Skill instructions: SKILL.md
-- Examples and this guide: examples/usage.md
-- Blueprint schema: templates/agent-blueprint.schema.json
-- State schema: templates/agent-builder-state.schema.json
-- Scaffold kit: templates/agent-kit/node/layout/
-- Prompt pack templates: templates/prompt-pack/
+## 5. Troubleshooting
 
----
+### 5.1 Common Validation Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| "Missing required block: X" | Blueprint missing top-level section | Add the required block |
+| "AGENT_ENABLED must be required=true" | Kill switch not properly configured | Add to env_vars with required: true |
+| "api.routes must include run and health" | Missing standard routes | Add both route definitions |
+| "Schema ref does not resolve" | Reference to undefined schema | Define schema or fix ref path |
+| "worker block required" | attach includes worker but no config | Add worker configuration block |
+
+### 5.2 Runtime Issues
+
+| Symptom | Likely Cause | Resolution |
+|---------|--------------|------------|
+| 503 on all requests | AGENT_ENABLED=false | Set AGENT_ENABLED=true |
+| Tool returns "not implemented" | Stage D incomplete | Implement tool logic in tools.js |
+| Conversation not persisting | storage.kind=none | Configure persistent storage |
+| Summary never updates | threshold too high | Lower threshold values |
+| Streaming not working | Wrong protocol | Ensure client uses websocket |
+
+### 5.3 Performance Tuning
+
+| Issue | Metric | Tuning |
+|-------|--------|--------|
+| Slow response | latency > p95 budget | Reduce max_output_tokens, use faster model |
+| High memory | conversation storage | Reduce window_turns/window_tokens |
+| Rate limiting | throughput > rps | Add worker for overflow |
+| Cost overrun | cost > max_usd_per_task | Set stricter token limits |

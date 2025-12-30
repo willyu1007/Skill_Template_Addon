@@ -1,16 +1,16 @@
 {
-  "name": "__AGENT_PKG_NAME__",
-  "version": "0.1.0",
+  "name": "{{sdk_package_name}}",
+  "version": "{{sdk_package_version}}",
   "private": true,
-  "type": "module",
+  "type": "commonjs",
+  "main": "src/index.js",
   "scripts": {
-    "start:api": "node src/adapters/http/server.js",
-    "start:worker": "node src/adapters/worker/worker.js",
-    "run:cron": "node src/adapters/cron/run-cron.js",
-    "run:pipeline": "node src/adapters/pipeline/run-step.js",
-    "test": "node src/tests/smoke.test.js"
+    "start": "node src/adapters/http/server.js",
+    "worker": "node src/adapters/worker/worker.js",
+    "cron": "node src/adapters/cron/cron.js",
+    "pipeline": "node src/adapters/pipeline/pipeline.js",
+    "test": "node --test"
   },
-  "engines": {
-    "node": ">=18"
+  "dependencies": {
   }
 }

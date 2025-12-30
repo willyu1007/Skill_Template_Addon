@@ -1,10 +1,9 @@
-# Evaluation
+# {{agent_name}} — Evaluation
 
 ## Acceptance scenarios
-1. <...>
+{{acceptance_scenarios_list}}
 
-## Regression suite
-- <...>
+## Notes
+- Ensure at least one failure-path scenario and the kill-switch scenario.
+- Add automated tests where possible (HTTP smoke tests, worker processing tests, etc.).
 
-## How to run
-- <commands>

@@ -16,8 +16,8 @@ Human operator or LLM running `agent_builder` for a real feature request.
 ### 1) Problem framing and scope
 - MUST define the single primary outcome, the primary callers, and the Definition of Done.
 - MUST list `scope.in_scope` and `scope.out_of_scope`.
-- SHOULD list `deliverables.non_goals` to prevent scope creep.
-Record in: `stageA/interview-notes.md`, `stageB/agent-blueprint.json` (`scope.*`, `deliverables.non_goals`).
+- SHOULD document non-goals to prevent scope creep (in `scope.out_of_scope` or interview notes).
+Record in: `stageA/interview-notes.md`, `stageB/agent-blueprint.json` (`scope.*`).
 
 ### 2) Integration embedding and interfaces
 - MUST choose the primary embedding (`integration.primary`) and any attachments (`integration.attach`).

@@ -1,35 +1,29 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.local/schemas/agent-builder-state.schema.json",
-  "title": "Agent Builder Run State",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Agent Builder State",
+  "description": "Tracks a single agent_builder run across stages A–E.",
   "type": "object",
-  "additionalProperties": true,
   "required": [
     "version",
     "run_id",
     "created_at",
-    "workdir",
     "stage",
-    "stages"
+    "workdir",
+    "approvals",
+    "stageA",
+    "stageB",
+    "stageC",
+    "history"
   ],
   "properties": {
     "version": {
       "type": "integer",
-      "minimum": 1
+      "const": 1
     },
     "run_id": {
-      "type": "string",
-      "minLength": 1
+      "type": "string"
     },
     "created_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "workdir": {
-      "type": "string",
-      "minLength": 1
-    },
-    "repo_root": {
       "type": "string"
     },
     "stage": {
@@ -40,95 +34,168 @@
         "C",
         "D",
         "E",
-        "DONE"
+        "complete"
       ]
     },
-    "stages": {
+    "workdir": {
+      "type": "string"
+    },
+    "repo_root": {
+      "type": "string"
+    },
+    "approvals": {
       "type": "object",
-      "additionalProperties": false,
       "required": [
         "A",
-        "B",
-        "C",
-        "D",
-        "E"
+        "B"
       ],
       "properties": {
         "A": {
-          "$ref": "#/$defs/StageState"
+          "type": "boolean"
         },
         "B": {
-          "$ref": "#/$defs/StageState"
+          "type": "boolean"
         },
         "C": {
-          "$ref": "#/$defs/StageState"
+          "type": "boolean"
         },
         "D": {
-          "$ref": "#/$defs/StageState"
+          "type": "boolean"
         },
         "E": {
-          "$ref": "#/$defs/StageState"
+          "type": "boolean"
         }
-      }
+      },
+      "additionalProperties": false
     },
-    "blueprint_path": {
-      "type": "string"
-    },
-    "history": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": true,
-        "required": [
-          "timestamp",
-          "event"
-        ],
-        "properties": {
-          "timestamp": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "event": {
-            "type": "string"
-          },
-          "details": {}
-        }
-      }
-    }
-  },
-  "$defs": {
-    "StageState": {
+    "stageA": {
       "type": "object",
-      "additionalProperties": true,
       "required": [
-        "status",
-        "user_approved"
+        "interview_notes_path",
+        "integration_decision_path"
       ],
+      "properties": {
+        "interview_notes_path": {
+          "type": "string"
+        },
+        "integration_decision_path": {
+          "type": "string"
+        },
+        "approved_at": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "stageB": {
+      "type": "object",
+      "required": [
+        "blueprint_path",
+        "validated"
+      ],
+      "properties": {
+        "blueprint_path": {
+          "type": "string"
+        },
+        "validated": {
+          "type": "boolean"
+        },
+        "validated_at": {
+          "type": "string"
+        },
+        "approved_at": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "stageC": {
+      "type": "object",
+      "required": [
+        "planned"
+      ],
+      "properties": {
+        "planned": {
+          "type": "boolean"
+        },
+        "planned_at": {
+          "type": "string"
+        },
+        "applied": {
+          "type": "boolean"
+        },
+        "applied_at": {
+          "type": "string"
+        },
+        "generated_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skipped_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "stageD": {
+      "type": "object",
       "properties": {
         "status": {
           "type": "string",
           "enum": [
             "not_started",
             "in_progress",
-            "ready_for_review",
-            "approved",
-            "applied",
-            "complete"
+            "done"
           ]
-        },
-        "user_approved": {
-          "type": "boolean"
         },
         "notes": {
           "type": "string"
-        },
-        "artifacts": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
         }
+      },
+      "additionalProperties": true
+    },
+    "stageE": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "not_started",
+            "in_progress",
+            "done"
+          ]
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "timestamp",
+          "event"
+        ],
+        "properties": {
+          "timestamp": {
+            "type": "string"
+          },
+          "event": {
+            "type": "string"
+          },
+          "details": {}
+        },
+        "additionalProperties": true
       }
     }
-  }
+  },
+  "additionalProperties": true
 }

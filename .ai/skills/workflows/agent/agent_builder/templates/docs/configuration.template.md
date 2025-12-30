@@ -1,9 +1,11 @@
-# Configuration
+# {{agent_name}} — Configuration
 
 ## Environment variables
-| Name | Required | Sensitivity | Description |
-|------|----------|-------------|-------------|
-| ...  | ...      | ...         | ...         |
+
+> Never commit secrets. `.env.example` is placeholders only.
+
+{{env_vars_table}}
 
 ## Config files
-- <path>: <purpose>
+{{config_files_list}}
+
