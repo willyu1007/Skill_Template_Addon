@@ -32,7 +32,7 @@ A successful build produces, at minimum:
   - `src/adapters/` (http/worker/sdk/cron/pipeline entrypoints)
   - `prompts/` (tiered prompt pack)
   - `schemas/` (request/response/error schemas)
-- Project docs under `deliverables.docs_path` (overview, integration, configuration, data flow, runbook, evaluation).
+- Project docs under `deliverables.docs_path/doc` (overview, integration, configuration, data flow, runbook, evaluation).
 - An updated registry at `deliverables.registry_path` (MUST be written).
 
 ## Workflow (Stages A–E)

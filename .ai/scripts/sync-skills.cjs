@@ -218,15 +218,36 @@ function loadSkills(skillsRoot) {
   return { skills, byName };
 }
 
-function buildStub(skillName, sourceRelDirFromRepoRoot, sourceContent) {
-  const frontmatter = readFrontmatter(sourceContent)
-    || `---\nname: ${skillName}\ndescription: See ${sourceRelDirFromRepoRoot}/SKILL.md\n---\n\n`;
-  const frontmatterBlock = frontmatter.trimEnd();
-  const displayName = extractName(frontmatterBlock, skillName);
+function buildStub(skillName, sourceRelDirFromRepoRoot, sourceContent, relFromSkillsRoot) {
+  const originalFrontmatter = readFrontmatter(sourceContent);
   const canonicalDir = sourceRelDirFromRepoRoot.replace(/\/$/, '');
 
+  // Extract category from relFromSkillsRoot (e.g., "workflows/common/fix-frontend-runtime-errors" -> "workflows/common")
+  const pathParts = relFromSkillsRoot.split('/');
+  const category = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : '';
+
+  // Build enhanced frontmatter with ssot_path and category (方案B)
+  let enhancedFrontmatter;
+  if (originalFrontmatter) {
+    // Insert ssot_path and category before the closing ---
+    const lines = originalFrontmatter.trim().split('\n');
+    const closingIdx = lines.lastIndexOf('---');
+    if (closingIdx > 0) {
+      lines.splice(closingIdx, 0, `ssot_path: ${canonicalDir}`);
+      if (category) {
+        lines.splice(closingIdx, 0, `category: ${category}`);
+      }
+    }
+    enhancedFrontmatter = lines.join('\n');
+  } else {
+    const categoryLine = category ? `category: ${category}\n` : '';
+    enhancedFrontmatter = `---\nname: ${skillName}\ndescription: See ${canonicalDir}/SKILL.md\n${categoryLine}ssot_path: ${canonicalDir}\n---`;
+  }
+
+  const displayName = extractName(enhancedFrontmatter, skillName);
+
   return [
-    frontmatterBlock,
+    enhancedFrontmatter,
     '',
     `# ${displayName} (entry)`,
     '',
@@ -234,7 +255,7 @@ function buildStub(skillName, sourceRelDirFromRepoRoot, sourceContent) {
     '',
     `Open \`${canonicalDir}/SKILL.md\` and any supporting files referenced there (for example \`reference.md\`, \`examples.md\`, \`scripts/\`, \`templates/\`).`,
     '',
-    '> **Note**: The frontmatter above is identical to the canonical source. After opening the source file, skip re-reading the description to avoid redundant token usage.',
+    '> **Note**: The frontmatter above is identical to the canonical source except for `ssot_path` and `category` which are added for navigation. After opening the source file, skip re-reading the description to avoid redundant token usage.',
     '',
   ].join('\n');
 }
@@ -398,30 +419,78 @@ function selectSkills(args, allSkills) {
   process.exit(1);
 }
 
-function deleteWrappers({ providers, skillNames, dryRun }) {
+/**
+ * Find all wrapper directories (containing SKILL.md) under targetRoot.
+ * Returns array of { relPath, absPath } where relPath is relative to targetRoot.
+ */
+function findWrapperDirs(targetRoot) {
+  if (!fs.existsSync(targetRoot)) return [];
+
+  const wrappers = [];
+  const stack = [targetRoot];
+
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    const hasSkillMd = entries.some((e) => e.isFile() && e.name === SKILL_MD);
+    if (hasSkillMd) {
+      wrappers.push({
+        relPath: toPosix(path.relative(targetRoot, dir)),
+        absPath: dir,
+      });
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      stack.push(path.join(dir, entry.name));
+    }
+  }
+
+  return wrappers;
+}
+
+function deleteWrappers({ providers, skillNames, dryRun, allSkills }) {
   console.log(colors.cyan('========================================'));
   console.log(colors.cyan('  Deleting skill stubs'));
   console.log(colors.cyan('========================================'));
+
+  // Build a map from skill name to relFromSkillsRoot
+  const nameToPath = new Map();
+  if (allSkills) {
+    for (const s of allSkills) {
+      nameToPath.set(s.name, s.relFromSkillsRoot);
+    }
+  }
 
   for (const provider of providers) {
     const targetRoot = providerDefaults[provider];
     console.log('');
     console.log(colors.green(`Provider: ${provider}`));
 
-    for (const name of skillNames) {
-      const targetDir = path.join(targetRoot, name);
+    for (const nameOrPath of skillNames) {
+      // Try to resolve name to path using allSkills, otherwise treat as path
+      const targetRelPath = nameToPath.get(nameOrPath) || nameOrPath;
+      const targetDir = path.join(targetRoot, targetRelPath);
+
       if (!fs.existsSync(targetDir)) {
-        console.log(colors.gray(`  [-] ${name} (not present)`));
+        console.log(colors.gray(`  [-] ${targetRelPath} (not present)`));
         continue;
       }
 
       if (dryRun) {
-        console.log(colors.gray(`  [~] ${name} (dry-run delete)`));
+        console.log(colors.gray(`  [~] ${targetRelPath} (dry-run delete)`));
         continue;
       }
 
       fs.rmSync(targetDir, { recursive: true, force: true });
-      console.log(colors.gray(`  [-] ${name}`));
+      console.log(colors.gray(`  [-] ${targetRelPath}`));
     }
   }
 }
@@ -451,7 +520,7 @@ function sync() {
   }
 
   if (args.deleteSkills.length > 0) {
-    deleteWrappers({ providers, skillNames: args.deleteSkills, dryRun: args.dryRun });
+    deleteWrappers({ providers, skillNames: args.deleteSkills, dryRun: args.dryRun, allSkills });
     return;
   }
 
@@ -464,8 +533,9 @@ function sync() {
   console.log(colors.gray(`  mode: ${mode}${mode === 'update' && args.prune ? ' + prune' : ''}`));
   console.log(colors.gray(`  selected_skills: ${selectedSkills.length}`));
 
-  const allNames = new Set(allSkills.map((s) => s.name));
-  const selectedNames = new Set(selectedSkills.map((s) => s.name));
+  // Use relFromSkillsRoot (paths) for matching instead of flat names (方案A)
+  const allPaths = new Set(allSkills.map((s) => s.relFromSkillsRoot));
+  const selectedPaths = new Set(selectedSkills.map((s) => s.relFromSkillsRoot));
 
   for (const provider of providers) {
     const targetRoot = providerDefaults[provider];
@@ -487,37 +557,35 @@ function sync() {
     }
 
     if (mode === 'update' && args.prune) {
-      const entries = fs.existsSync(targetRoot)
-        ? fs.readdirSync(targetRoot, { withFileTypes: true })
-        : [];
-      for (const e of entries) {
-        if (!e.isDirectory()) continue;
-        if (!allNames.has(e.name)) continue;
-        if (selectedNames.has(e.name)) continue;
-        const targetDir = path.join(targetRoot, e.name);
+      // Find existing wrappers recursively (they now have hierarchy)
+      const existingWrappers = findWrapperDirs(targetRoot);
+      for (const wrapper of existingWrappers) {
+        if (!allPaths.has(wrapper.relPath)) continue; // not a known skill
+        if (selectedPaths.has(wrapper.relPath)) continue; // is in selected set
         if (args.dryRun) {
-          console.log(colors.gray(`  [~] prune ${e.name} (dry-run)`));
+          console.log(colors.gray(`  [~] prune ${wrapper.relPath} (dry-run)`));
         } else {
-          fs.rmSync(targetDir, { recursive: true, force: true });
-          console.log(colors.gray(`  [-] ${e.name} (pruned)`));
+          fs.rmSync(wrapper.absPath, { recursive: true, force: true });
+          console.log(colors.gray(`  [-] ${wrapper.relPath} (pruned)`));
         }
       }
     }
 
     for (const skill of selectedSkills) {
       const sourceRelDir = toPosix(path.relative(repoRoot, skill.dir));
-      const stub = buildStub(skill.name, sourceRelDir, skill.content);
-      const targetDir = path.join(targetRoot, skill.name);
+      const stub = buildStub(skill.name, sourceRelDir, skill.content, skill.relFromSkillsRoot);
+      // 方案A: 保留层次结构，使用 relFromSkillsRoot 而不是扁平的 name
+      const targetDir = path.join(targetRoot, skill.relFromSkillsRoot);
       const targetSkillMd = path.join(targetDir, SKILL_MD);
 
       if (args.dryRun) {
-        console.log(colors.gray(`  [~] write ${skill.name} -> ${toPosix(path.relative(repoRoot, targetSkillMd))}`));
+        console.log(colors.gray(`  [~] write ${skill.relFromSkillsRoot} -> ${toPosix(path.relative(repoRoot, targetSkillMd))}`));
         continue;
       }
 
       ensureDir(targetDir);
       fs.writeFileSync(targetSkillMd, stub, 'utf8');
-      console.log(colors.gray(`  [+] ${skill.name}`));
+      console.log(colors.gray(`  [+] ${skill.relFromSkillsRoot}`));
     }
   }
 

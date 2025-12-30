@@ -71,7 +71,7 @@ This file is designed for the **Stage A interview**. It is intended to be used i
 - Runbook expectations (deploy, rollback, disable, debugging)
 
 ## 8) Acceptance scenarios
-Provide at least 3 end-to-end scenarios:
+Provide at least 2 end-to-end scenarios:
 - Happy path (core function)
 - Health/readiness
 - Failure / kill switch / degradation behavior

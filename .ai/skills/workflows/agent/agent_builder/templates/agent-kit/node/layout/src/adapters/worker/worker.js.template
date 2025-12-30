@@ -12,6 +12,12 @@ function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
 }
 
+function moveToDir(filePath, dir) {
+  ensureDir(dir);
+  const dest = path.join(dir, path.basename(filePath));
+  fs.renameSync(filePath, dest);
+}
+
 function listJsonFiles(dir) {
   try {
     return fs.readdirSync(dir)
@@ -26,6 +32,8 @@ async function processFile(filePath, cfg) {
   const started = Date.now();
   const name = path.basename(filePath);
   const requestId = 'wkr_' + name.replace(/\W+/g, '_');
+  const doneDir = path.join(cfg.worker.inputDir, '.done');
+  const failedDir = path.join(cfg.worker.inputDir, '.failed');
 
   let req;
   try {
@@ -37,7 +45,7 @@ async function processFile(filePath, cfg) {
     // Move to output as error
     const outPath = path.join(cfg.worker.outputDir, name.replace(/\.json$/, '.error.json'));
     fs.writeFileSync(outPath, JSON.stringify(e, null, 2));
-    fs.renameSync(filePath, filePath + '.bad');
+    moveToDir(filePath, failedDir);
     return;
   }
 
@@ -45,13 +53,13 @@ async function processFile(filePath, cfg) {
     const output = await runAgent(req, { requestId });
     const outPath = path.join(cfg.worker.outputDir, name.replace(/\.json$/, '.out.json'));
     fs.writeFileSync(outPath, JSON.stringify(output, null, 2));
-    fs.renameSync(filePath, filePath + '.done');
+    moveToDir(filePath, doneDir);
     log('info', { msg: 'worker_processed', file: filePath, durationMs: Date.now() - started });
   } catch (err) {
     const e = toErrorResponse(err);
     const outPath = path.join(cfg.worker.outputDir, name.replace(/\.json$/, '.error.json'));
     fs.writeFileSync(outPath, JSON.stringify(e, null, 2));
-    fs.renameSync(filePath, filePath + '.failed');
+    moveToDir(filePath, failedDir);
     log('error', { msg: 'worker_failed', file: filePath, durationMs: Date.now() - started, error: e });
   }
 }

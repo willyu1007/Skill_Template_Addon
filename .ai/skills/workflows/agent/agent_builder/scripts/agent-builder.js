@@ -163,60 +163,148 @@ function validateBlueprint(blueprint) {
 
   function req(cond, msg) { if (!cond) errors.push(msg); }
   function warn(cond, msg) { if (!cond) warnings.push(msg); }
+  const isObject = (val) => !!val && typeof val === 'object' && !Array.isArray(val);
+  const isNonEmptyString = (val) => typeof val === 'string' && val.trim().length > 0;
+  const isPositiveInt = (val) => Number.isInteger(val) && val > 0;
+  const isNonNegativeInt = (val) => Number.isInteger(val) && val >= 0;
+  const requireEnum = (val, allowed, label) => {
+    req(allowed.has(val), `${label} must be one of: ${Array.from(allowed).join(', ')}`);
+  };
+  const requireSchemaRef = (ref, label, schemas) => {
+    const key = schemaRefKey(ref);
+    req(!!key, `${label} must match "#/schemas/<Name>".`);
+    if (key) req(!!schemas[key], `${label} references missing schema: ${key}`);
+    return key;
+  };
 
-  req(blueprint && typeof blueprint === 'object', 'Blueprint must be a JSON object.');
-  if (!blueprint || typeof blueprint !== 'object') return { ok: false, errors, warnings };
+  req(isObject(blueprint), 'Blueprint must be a JSON object.');
+  if (!isObject(blueprint)) return { ok: false, errors, warnings };
 
   req(blueprint.kind === 'agent_blueprint', 'kind must be "agent_blueprint".');
   req(Number.isInteger(blueprint.version) && blueprint.version >= 1, 'version must be an integer >= 1.');
 
+  const meta = blueprint.meta || {};
+  req(isObject(meta), 'meta is required (object).');
+  req(isNonEmptyString(meta.generated_at), 'meta.generated_at is required (string).');
+  if (isNonEmptyString(meta.generated_at)) {
+    req(!Number.isNaN(Date.parse(meta.generated_at)), 'meta.generated_at must be a valid date-time.');
+  }
+
   const agent = blueprint.agent || {};
-  req(typeof agent.id === 'string' && agent.id.length > 0, 'agent.id is required (string).');
-  req(typeof agent.name === 'string' && agent.name.length > 0, 'agent.name is required (string).');
-  req(typeof agent.summary === 'string' && agent.summary.length > 0, 'agent.summary is required (string).');
+  req(isObject(agent), 'agent is required (object).');
+  req(isNonEmptyString(agent.id), 'agent.id is required (string).');
+  req(isNonEmptyString(agent.name), 'agent.name is required (string).');
+  req(isNonEmptyString(agent.summary), 'agent.summary is required (string).');
   req(Array.isArray(agent.owners) && agent.owners.length > 0, 'agent.owners is required (non-empty array).');
+  const ownerTypes = new Set(['person','team','service']);
+  if (Array.isArray(agent.owners)) {
+    agent.owners.forEach((owner, idx) => {
+      if (!isObject(owner)) {
+        errors.push(`agent.owners[${idx}] must be an object.`);
+        return;
+      }
+      requireEnum(owner.type, ownerTypes, `agent.owners[${idx}].type`);
+      req(isNonEmptyString(owner.id), `agent.owners[${idx}].id is required (string).`);
+      if (owner.contact !== undefined) {
+        req(isNonEmptyString(owner.contact), `agent.owners[${idx}].contact must be a non-empty string.`);
+      }
+    });
+  }
 
   const scope = blueprint.scope || {};
+  req(isObject(scope), 'scope is required (object).');
   req(Array.isArray(scope.in_scope) && scope.in_scope.length > 0, 'scope.in_scope is required (non-empty array).');
   req(Array.isArray(scope.out_of_scope) && scope.out_of_scope.length > 0, 'scope.out_of_scope is required (non-empty array).');
-  req(typeof scope.definition_of_done === 'string' && scope.definition_of_done.length > 0, 'scope.definition_of_done is required (string).');
+  req(isNonEmptyString(scope.definition_of_done), 'scope.definition_of_done is required (string).');
+  if (Array.isArray(scope.in_scope)) {
+    scope.in_scope.forEach((item, idx) => {
+      req(isNonEmptyString(item), `scope.in_scope[${idx}] must be a non-empty string.`);
+    });
+  }
+  if (Array.isArray(scope.out_of_scope)) {
+    scope.out_of_scope.forEach((item, idx) => {
+      req(isNonEmptyString(item), `scope.out_of_scope[${idx}] must be a non-empty string.`);
+    });
+  }
 
   const integration = blueprint.integration || {};
+  req(isObject(integration), 'integration is required (object).');
   req(integration.primary === 'api', 'integration.primary must be "api" in v1.');
+  req(Array.isArray(integration.attach), 'integration.attach is required (array).');
   const attach = Array.isArray(integration.attach) ? integration.attach : [];
   const allowedAttach = new Set(['worker','sdk','cron','pipeline']);
-  for (const a of attach) req(allowedAttach.has(a), `integration.attach contains unsupported value: ${a}`);
+  const attachSet = new Set();
+  for (const a of attach) {
+    if (!allowedAttach.has(a)) {
+      errors.push(`integration.attach contains unsupported value: ${a}`);
+      continue;
+    }
+    if (attachSet.has(a)) errors.push(`integration.attach contains duplicate value: ${a}`);
+    attachSet.add(a);
+  }
+
+  const trigger = integration.trigger || {};
+  req(isObject(trigger), 'integration.trigger is required (object).');
+  if (isObject(trigger)) {
+    const allowedTrigger = new Set(['sync_request','async_event','scheduled','manual','batch']);
+    requireEnum(trigger.kind, allowedTrigger, 'integration.trigger.kind');
+  }
+
+  const target = integration.target || {};
+  req(isObject(target), 'integration.target is required (object).');
+  if (isObject(target)) {
+    const allowedTarget = new Set(['service','repo_module','pipeline_step','queue','topic','job','function','other']);
+    requireEnum(target.kind, allowedTarget, 'integration.target.kind');
+    req(isNonEmptyString(target.name), 'integration.target.name is required (string).');
+  }
 
   // failure contract
-  const failMode = integration.failure_contract?.mode;
+  const failureContract = integration.failure_contract || {};
+  req(isObject(failureContract), 'integration.failure_contract is required (object).');
+  const failMode = failureContract?.mode;
   const allowedFail = new Set(['propagate_error','return_fallback','enqueue_retry']);
   req(allowedFail.has(failMode), `integration.failure_contract.mode must be one of: ${Array.from(allowedFail).join(', ')}`);
   // explicit disallow (defense-in-depth)
   req(failMode !== 'suppress_and_alert', 'integration.failure_contract.mode must not be "suppress_and_alert".');
 
   // rollback contract
-  const rb = integration.rollback_or_disable?.method;
+  const rollback = integration.rollback_or_disable || {};
+  req(isObject(rollback), 'integration.rollback_or_disable is required (object).');
+  const rb = rollback?.method;
   const allowedRb = new Set(['feature_flag','config_toggle','route_switch','deployment_rollback']);
   req(allowedRb.has(rb), `integration.rollback_or_disable.method must be one of: ${Array.from(allowedRb).join(', ')}`);
 
   // schemas
   const schemas = blueprint.schemas || {};
-  req(schemas && typeof schemas === 'object', 'schemas is required (object).');
-  req(!!schemas.RunRequest, 'schemas.RunRequest is required.');
-  req(!!schemas.RunResponse, 'schemas.RunResponse is required.');
-  req(!!schemas.AgentError, 'schemas.AgentError is required.');
+  req(isObject(schemas), 'schemas is required (object).');
+  req(isObject(schemas.RunRequest), 'schemas.RunRequest is required.');
+  req(isObject(schemas.RunResponse), 'schemas.RunResponse is required.');
+  req(isObject(schemas.AgentError), 'schemas.AgentError is required.');
 
   // contract refs
-  const upKey = schemaRefKey(integration.upstream_contract_ref);
-  const downKey = schemaRefKey(integration.downstream_contract_ref);
-  req(!!upKey, 'integration.upstream_contract_ref must match "#/schemas/<Name>".');
-  req(!!downKey, 'integration.downstream_contract_ref must match "#/schemas/<Name>".');
-  if (upKey) req(!!schemas[upKey], `integration.upstream_contract_ref references missing schema: ${upKey}`);
-  if (downKey) req(!!schemas[downKey], `integration.downstream_contract_ref references missing schema: ${downKey}`);
+  requireSchemaRef(integration.upstream_contract_ref, 'integration.upstream_contract_ref', schemas);
+  requireSchemaRef(integration.downstream_contract_ref, 'integration.downstream_contract_ref', schemas);
 
   // interfaces
   const interfaces = Array.isArray(blueprint.interfaces) ? blueprint.interfaces : [];
   req(interfaces.length > 0, 'interfaces is required (non-empty array).');
+  const allowedInterfaces = new Set(['http','worker','sdk','cron','pipeline','cli']);
+  if (Array.isArray(interfaces)) {
+    interfaces.forEach((iface, idx) => {
+      if (!isObject(iface)) {
+        errors.push(`interfaces[${idx}] must be an object.`);
+        return;
+      }
+      requireEnum(iface.type, allowedInterfaces, `interfaces[${idx}].type`);
+      req(isNonEmptyString(iface.entrypoint), `interfaces[${idx}].entrypoint is required (string).`);
+      requireSchemaRef(iface.input_schema_ref, `interfaces[${idx}].input_schema_ref`, schemas);
+      requireSchemaRef(iface.output_schema_ref, `interfaces[${idx}].output_schema_ref`, schemas);
+      if (iface.error_schema_ref !== undefined) {
+        requireSchemaRef(iface.error_schema_ref, `interfaces[${idx}].error_schema_ref`, schemas);
+      }
+      req(isPositiveInt(iface.examples_min), `interfaces[${idx}].examples_min must be an integer >= 1.`);
+    });
+  }
 
   const hasType = (t) => interfaces.some((i) => i && i.type === t);
   req(hasType('http'), 'interfaces must include type "http" when primary=api.');
@@ -227,52 +315,403 @@ function validateBlueprint(blueprint) {
 
   // api config
   const api = blueprint.api || null;
-  req(!!api, 'api config block is required when primary=api.');
-  if (api) {
-    req(typeof api.base_path === 'string' && api.base_path.length > 0, 'api.base_path is required (string).');
+  req(isObject(api), 'api config block is required when primary=api.');
+  if (isObject(api)) {
+    const allowedProtocol = new Set(['http','grpc']);
+    requireEnum(api.protocol, allowedProtocol, 'api.protocol');
+    req(isNonEmptyString(api.base_path), 'api.base_path is required (string).');
+    req(isPositiveInt(api.timeout_budget_ms), 'api.timeout_budget_ms must be an integer >= 1.');
+    const routes = Array.isArray(api.routes) ? api.routes : [];
     req(Array.isArray(api.routes) && api.routes.length >= 2, 'api.routes must be an array with at least 2 routes.');
-    const routeNames = new Set((api.routes || []).map(r => r?.name).filter(Boolean));
+    const routeNames = new Set(routes.map((r) => r?.name).filter(Boolean));
     req(routeNames.has('run'), 'api.routes must include name="run".');
     req(routeNames.has('health'), 'api.routes must include name="health".');
 
-    for (const r of api.routes || []) {
-      if (!r) continue;
-      req(r.name === 'run' || r.name === 'health', 'api.routes[].name must be "run" or "health".');
+    const allowedMethods = new Set(['get','post','put','patch','delete']);
+    routes.forEach((route, idx) => {
+      if (!isObject(route)) {
+        errors.push(`api.routes[${idx}] must be an object.`);
+        return;
+      }
+      requireEnum(route.name, new Set(['run','health']), `api.routes[${idx}].name`);
+      requireEnum(route.method, allowedMethods, `api.routes[${idx}].method`);
+      req(isNonEmptyString(route.path), `api.routes[${idx}].path is required (string).`);
+      requireSchemaRef(route.request_schema_ref, `api.routes[${idx}].request_schema_ref`, schemas);
+      requireSchemaRef(route.response_schema_ref, `api.routes[${idx}].response_schema_ref`, schemas);
+      if (route.error_schema_ref !== undefined) {
+        requireSchemaRef(route.error_schema_ref, `api.routes[${idx}].error_schema_ref`, schemas);
+      }
+    });
+
+    const auth = api.auth || {};
+    req(isObject(auth), 'api.auth is required (object).');
+    if (isObject(auth)) {
+      const allowedAuth = new Set(['none','api_key','bearer_token','oauth2','mtls','internal_gateway']);
+      requireEnum(auth.kind, allowedAuth, 'api.auth.kind');
+      if (auth.env_var !== undefined) {
+        req(isNonEmptyString(auth.env_var), 'api.auth.env_var must be a non-empty string.');
+      }
+    }
+
+    const degradation = api.degradation || {};
+    req(isObject(degradation), 'api.degradation is required (object).');
+    if (isObject(degradation)) {
+      const allowedDegradation = new Set(['none','return_fallback','return_unavailable','route_to_worker']);
+      requireEnum(degradation.mode, allowedDegradation, 'api.degradation.mode');
     }
   }
 
   // optional blocks required by attach
-  if (attach.includes('worker')) req(!!blueprint.worker, 'worker block is required because attach includes "worker".');
-  if (attach.includes('sdk')) req(!!blueprint.sdk, 'sdk block is required because attach includes "sdk".');
-  if (attach.includes('cron')) req(!!blueprint.cron, 'cron block is required because attach includes "cron".');
-  if (attach.includes('pipeline')) req(!!blueprint.pipeline, 'pipeline block is required because attach includes "pipeline".');
+  if (attach.includes('worker')) {
+    const worker = blueprint.worker || {};
+    req(isObject(worker), 'worker block is required because attach includes "worker".');
+    if (isObject(worker)) {
+      const source = worker.source || {};
+      req(isObject(source), 'worker.source is required (object).');
+      if (isObject(source)) {
+        const allowedSource = new Set(['queue','topic','task_table','cron','webhook']);
+        requireEnum(source.kind, allowedSource, 'worker.source.kind');
+        req(isNonEmptyString(source.name), 'worker.source.name is required (string).');
+      }
+
+      const execution = worker.execution || {};
+      req(isObject(execution), 'worker.execution is required (object).');
+      if (isObject(execution)) {
+        req(isPositiveInt(execution.max_concurrency), 'worker.execution.max_concurrency must be an integer >= 1.');
+        req(isPositiveInt(execution.timeout_ms), 'worker.execution.timeout_ms must be an integer >= 1.');
+      }
+
+      const retry = worker.retry || {};
+      req(isObject(retry), 'worker.retry is required (object).');
+      if (isObject(retry)) {
+        req(isPositiveInt(retry.max_attempts), 'worker.retry.max_attempts must be an integer >= 1.');
+        const backoff = retry.backoff || {};
+        req(isObject(backoff), 'worker.retry.backoff is required (object).');
+        if (isObject(backoff)) {
+          const allowedBackoff = new Set(['fixed','exponential','exponential_jitter']);
+          requireEnum(backoff.strategy, allowedBackoff, 'worker.retry.backoff.strategy');
+          if (backoff.base_delay_ms !== undefined) {
+            req(isNonNegativeInt(backoff.base_delay_ms), 'worker.retry.backoff.base_delay_ms must be an integer >= 0.');
+          }
+        }
+      }
+
+      const idempotency = worker.idempotency || {};
+      req(isObject(idempotency), 'worker.idempotency is required (object).');
+      if (isObject(idempotency)) {
+        const allowedId = new Set(['none','header','payload_field','hash_payload','external_key']);
+        requireEnum(idempotency.strategy, allowedId, 'worker.idempotency.strategy');
+      }
+
+      const failure = worker.failure || {};
+      req(isObject(failure), 'worker.failure is required (object).');
+      if (isObject(failure)) {
+        const deadLetter = failure.dead_letter || {};
+        req(isObject(deadLetter), 'worker.failure.dead_letter is required (object).');
+        if (isObject(deadLetter)) {
+          const allowedDeadLetter = new Set(['none','queue','topic','table']);
+          requireEnum(deadLetter.kind, allowedDeadLetter, 'worker.failure.dead_letter.kind');
+        }
+        const allowedAlertOn = new Set(['always','after_retries','never']);
+        requireEnum(failure.alert_on, allowedAlertOn, 'worker.failure.alert_on');
+      }
+    }
+  }
+
+  if (attach.includes('sdk')) {
+    const sdk = blueprint.sdk || {};
+    req(isObject(sdk), 'sdk block is required because attach includes "sdk".');
+    if (isObject(sdk)) {
+      const allowedLang = new Set(['typescript','python','go','java','dotnet']);
+      requireEnum(sdk.language, allowedLang, 'sdk.language');
+      const pkg = sdk.package || {};
+      req(isObject(pkg), 'sdk.package is required (object).');
+      if (isObject(pkg)) {
+        req(isNonEmptyString(pkg.name), 'sdk.package.name is required (string).');
+        req(isNonEmptyString(pkg.version), 'sdk.package.version is required (string).');
+      }
+      req(Array.isArray(sdk.exports) && sdk.exports.length > 0, 'sdk.exports must be a non-empty array.');
+      if (Array.isArray(sdk.exports)) {
+        sdk.exports.forEach((ex, idx) => {
+          if (!isObject(ex)) {
+            errors.push(`sdk.exports[${idx}] must be an object.`);
+            return;
+          }
+          req(isNonEmptyString(ex.name), `sdk.exports[${idx}].name is required (string).`);
+          requireSchemaRef(ex.input_schema_ref, `sdk.exports[${idx}].input_schema_ref`, schemas);
+          requireSchemaRef(ex.output_schema_ref, `sdk.exports[${idx}].output_schema_ref`, schemas);
+          if (ex.error_schema_ref !== undefined) {
+            requireSchemaRef(ex.error_schema_ref, `sdk.exports[${idx}].error_schema_ref`, schemas);
+          }
+        });
+      }
+      const compat = sdk.compatibility || {};
+      req(isObject(compat), 'sdk.compatibility is required (object).');
+      if (isObject(compat)) {
+        const allowedSemver = new Set(['strict','relaxed']);
+        requireEnum(compat.semver, allowedSemver, 'sdk.compatibility.semver');
+        req(isNonEmptyString(compat.breaking_change_policy), 'sdk.compatibility.breaking_change_policy is required (string).');
+      }
+    }
+  }
+
+  if (attach.includes('cron')) {
+    const cron = blueprint.cron || {};
+    req(isObject(cron), 'cron block is required because attach includes "cron".');
+    if (isObject(cron)) {
+      req(isNonEmptyString(cron.schedule), 'cron.schedule is required (string).');
+      req(isNonEmptyString(cron.timezone), 'cron.timezone is required (string).');
+      const input = cron.input || {};
+      req(isObject(input), 'cron.input is required (object).');
+      if (isObject(input)) {
+        const allowedInput = new Set(['static_json','file','generate']);
+        requireEnum(input.mode, allowedInput, 'cron.input.mode');
+      }
+      const output = cron.output || {};
+      req(isObject(output), 'cron.output is required (object).');
+      if (isObject(output)) {
+        const allowedOutput = new Set(['stdout','file','http_callback']);
+        requireEnum(output.mode, allowedOutput, 'cron.output.mode');
+      }
+    }
+  }
+
+  if (attach.includes('pipeline')) {
+    const pipeline = blueprint.pipeline || {};
+    req(isObject(pipeline), 'pipeline block is required because attach includes "pipeline".');
+    if (isObject(pipeline)) {
+      const allowedKind = new Set(['ci','data_pipeline','etl','other']);
+      requireEnum(pipeline.kind, allowedKind, 'pipeline.kind');
+      const io = pipeline.io || {};
+      req(isObject(io), 'pipeline.io is required (object).');
+      if (isObject(io)) {
+        const allowedInput = new Set(['stdin_json','file_json']);
+        const allowedOutput = new Set(['stdout_json','file_json']);
+        requireEnum(io.input_mode, allowedInput, 'pipeline.io.input_mode');
+        requireEnum(io.output_mode, allowedOutput, 'pipeline.io.output_mode');
+      }
+    }
+  }
 
   // deliverables
   const del = blueprint.deliverables || {};
-  req(typeof del.agent_module_path === 'string' && del.agent_module_path.length > 0, 'deliverables.agent_module_path is required (string).');
-  req(typeof del.docs_path === 'string' && del.docs_path.length > 0, 'deliverables.docs_path is required (string).');
-  req(typeof del.registry_path === 'string' && del.registry_path.length > 0, 'deliverables.registry_path is required (string).');
+  req(isObject(del), 'deliverables is required (object).');
+  req(isNonEmptyString(del.agent_module_path), 'deliverables.agent_module_path is required (string).');
+  req(isNonEmptyString(del.docs_path), 'deliverables.docs_path is required (string).');
+  req(isNonEmptyString(del.registry_path), 'deliverables.registry_path is required (string).');
   req(del.core_adapter_separation === 'required', 'deliverables.core_adapter_separation must be "required".');
 
   // acceptance
   const acc = blueprint.acceptance || {};
-  req(Array.isArray(acc.scenarios) && acc.scenarios.length >= 3, 'acceptance.scenarios must be an array with at least 3 scenarios.');
+  req(Array.isArray(acc.scenarios) && acc.scenarios.length >= 2, 'acceptance.scenarios must be an array with at least 2 scenarios.');
+  if (Array.isArray(acc.scenarios)) {
+    const allowedPriority = new Set(['P0','P1','P2']);
+    acc.scenarios.forEach((scenario, idx) => {
+      if (!isObject(scenario)) {
+        errors.push(`acceptance.scenarios[${idx}] must be an object.`);
+        return;
+      }
+      req(isNonEmptyString(scenario.title), `acceptance.scenarios[${idx}].title is required (string).`);
+      req(isNonEmptyString(scenario.given), `acceptance.scenarios[${idx}].given is required (string).`);
+      req(isNonEmptyString(scenario.when), `acceptance.scenarios[${idx}].when is required (string).`);
+      req(isNonEmptyString(scenario.then), `acceptance.scenarios[${idx}].then is required (string).`);
+      req(Array.isArray(scenario.expected_output_checks) && scenario.expected_output_checks.length > 0, `acceptance.scenarios[${idx}].expected_output_checks must be a non-empty array.`);
+      if (Array.isArray(scenario.expected_output_checks)) {
+        scenario.expected_output_checks.forEach((check, cIdx) => {
+          req(isNonEmptyString(check), `acceptance.scenarios[${idx}].expected_output_checks[${cIdx}] must be a non-empty string.`);
+        });
+      }
+      requireEnum(scenario.priority, allowedPriority, `acceptance.scenarios[${idx}].priority`);
+    });
+  }
 
   // model
   const model = blueprint.model || {};
-  req(!!model.primary, 'model.primary is required.');
-  if (model.primary) {
-    req(typeof model.primary.model === 'string' && model.primary.model.length > 0, 'model.primary.model is required (string).');
-    req(typeof model.primary.reasoning_profile === 'string' && model.primary.reasoning_profile.length > 0, 'model.primary.reasoning_profile is required (string).');
+  req(isObject(model), 'model is required (object).');
+  req(isObject(model.primary), 'model.primary is required (object).');
+  if (isObject(model.primary)) {
+    req(isNonEmptyString(model.primary.model), 'model.primary.model is required (string).');
+    req(isNonEmptyString(model.primary.reasoning_profile), 'model.primary.reasoning_profile is required (string).');
+    if (model.primary.provider !== undefined) {
+      req(isObject(model.primary.provider), 'model.primary.provider must be an object when provided.');
+      if (isObject(model.primary.provider)) {
+        const allowedProvider = new Set(['openai','openai_compatible','azure_openai','internal_gateway','local']);
+        requireEnum(model.primary.provider.type, allowedProvider, 'model.primary.provider.type');
+      }
+    }
   }
 
   // config env vars
   const cfg = blueprint.configuration || {};
   const envs = Array.isArray(cfg.env_vars) ? cfg.env_vars : [];
+  req(isObject(cfg), 'configuration is required (object).');
   req(envs.length > 0, 'configuration.env_vars must be a non-empty array.');
-  warn(envs.some(e => e?.name === 'AGENT_ENABLED'), 'Recommended env var AGENT_ENABLED not present.');
+  const envPattern = /^[A-Z][A-Z0-9_]*$/;
+  const allowedSensitivity = new Set(['public','internal','secret']);
+  const seenEnv = new Set();
+  if (Array.isArray(envs)) {
+    envs.forEach((env, idx) => {
+      if (!isObject(env)) {
+        errors.push(`configuration.env_vars[${idx}] must be an object.`);
+        return;
+      }
+      req(isNonEmptyString(env.name) && envPattern.test(env.name), `configuration.env_vars[${idx}].name must match ${envPattern}.`);
+      req(isNonEmptyString(env.description), `configuration.env_vars[${idx}].description is required (string).`);
+      req(typeof env.required === 'boolean', `configuration.env_vars[${idx}].required must be boolean.`);
+      requireEnum(env.sensitivity, allowedSensitivity, `configuration.env_vars[${idx}].sensitivity`);
+      req(isNonEmptyString(env.example_placeholder), `configuration.env_vars[${idx}].example_placeholder is required (string).`);
+      if (env.name) {
+        if (seenEnv.has(env.name)) errors.push(`configuration.env_vars has duplicate name: ${env.name}`);
+        seenEnv.add(env.name);
+      }
+    });
+  }
+  req(envs.some(e => e?.name === 'AGENT_ENABLED'), 'configuration.env_vars must include AGENT_ENABLED for the kill switch.');
   warn(envs.some(e => e?.name === 'LLM_API_KEY'), 'Recommended env var LLM_API_KEY not present.');
   warn(envs.some(e => e?.name === 'LLM_MODEL'), 'Recommended env var LLM_MODEL not present.');
+
+  if (cfg.config_files !== undefined) {
+    req(Array.isArray(cfg.config_files), 'configuration.config_files must be an array when provided.');
+    if (Array.isArray(cfg.config_files)) {
+      cfg.config_files.forEach((file, idx) => {
+        if (!isObject(file)) {
+          errors.push(`configuration.config_files[${idx}] must be an object.`);
+          return;
+        }
+        req(isNonEmptyString(file.path), `configuration.config_files[${idx}].path is required (string).`);
+        req(isNonEmptyString(file.purpose), `configuration.config_files[${idx}].purpose is required (string).`);
+      });
+    }
+  }
+
+  const toolsBlock = blueprint.tools;
+  if (toolsBlock !== undefined) {
+    req(isObject(toolsBlock), 'tools must be an object when provided.');
+    const toolList = Array.isArray(toolsBlock?.tools) ? toolsBlock.tools : null;
+    if (toolsBlock && toolsBlock.tools !== undefined) {
+      req(Array.isArray(toolsBlock.tools), 'tools.tools must be an array when provided.');
+    }
+    if (Array.isArray(toolList)) {
+      toolList.forEach((tool, idx) => {
+        if (!isObject(tool)) {
+          errors.push(`tools.tools[${idx}] must be an object.`);
+          return;
+        }
+        req(isNonEmptyString(tool.name), `tools.tools[${idx}].name is required (string).`);
+        req(isNonEmptyString(tool.description), `tools.tools[${idx}].description is required (string).`);
+        if (tool.input_schema_ref !== undefined) {
+          requireSchemaRef(tool.input_schema_ref, `tools.tools[${idx}].input_schema_ref`, schemas);
+        }
+        if (tool.output_schema_ref !== undefined) {
+          requireSchemaRef(tool.output_schema_ref, `tools.tools[${idx}].output_schema_ref`, schemas);
+        }
+        if (tool.timeout_ms !== undefined) {
+          req(isPositiveInt(tool.timeout_ms), `tools.tools[${idx}].timeout_ms must be an integer >= 1.`);
+        }
+        if (tool.retries !== undefined) {
+          req(isNonNegativeInt(tool.retries), `tools.tools[${idx}].retries must be an integer >= 0.`);
+        }
+      });
+    }
+  }
+
+  const dataFlow = blueprint.data_flow;
+  if (dataFlow !== undefined) {
+    req(isObject(dataFlow), 'data_flow must be an object when provided.');
+    if (isObject(dataFlow)) {
+      if (dataFlow.data_classes !== undefined) {
+        req(Array.isArray(dataFlow.data_classes), 'data_flow.data_classes must be an array when provided.');
+        if (Array.isArray(dataFlow.data_classes)) {
+          dataFlow.data_classes.forEach((entry, idx) => {
+            req(isNonEmptyString(entry), `data_flow.data_classes[${idx}] must be a non-empty string.`);
+          });
+        }
+      }
+      if (dataFlow.retention !== undefined) req(isNonEmptyString(dataFlow.retention), 'data_flow.retention must be a non-empty string.');
+      if (dataFlow.redaction !== undefined) req(isNonEmptyString(dataFlow.redaction), 'data_flow.redaction must be a non-empty string.');
+      if (dataFlow.storage !== undefined) req(isNonEmptyString(dataFlow.storage), 'data_flow.storage must be a non-empty string.');
+      if (dataFlow.diagram_mermaid !== undefined) req(isNonEmptyString(dataFlow.diagram_mermaid), 'data_flow.diagram_mermaid must be a non-empty string.');
+    }
+  }
+
+  const observability = blueprint.observability;
+  if (observability !== undefined) {
+    req(isObject(observability), 'observability must be an object when provided.');
+    if (isObject(observability)) {
+      if (observability.logging !== undefined) req(isNonEmptyString(observability.logging), 'observability.logging must be a non-empty string.');
+      if (observability.metrics !== undefined) req(isNonEmptyString(observability.metrics), 'observability.metrics must be a non-empty string.');
+      if (observability.tracing !== undefined) req(isNonEmptyString(observability.tracing), 'observability.tracing must be a non-empty string.');
+      if (observability.alerts !== undefined) req(isNonEmptyString(observability.alerts), 'observability.alerts must be a non-empty string.');
+    }
+  }
+
+  const operations = blueprint.operations;
+  if (operations !== undefined) {
+    req(isObject(operations), 'operations must be an object when provided.');
+    if (isObject(operations)) {
+      if (operations.runbook_notes !== undefined) req(isNonEmptyString(operations.runbook_notes), 'operations.runbook_notes must be a non-empty string.');
+      if (operations.slo_sla !== undefined) req(isNonEmptyString(operations.slo_sla), 'operations.slo_sla must be a non-empty string.');
+      if (operations.oncall !== undefined) req(isNonEmptyString(operations.oncall), 'operations.oncall must be a non-empty string.');
+    }
+  }
+
+  const prompting = blueprint.prompting;
+  if (prompting !== undefined) {
+    req(isObject(prompting), 'prompting must be an object when provided.');
+    if (isObject(prompting)) {
+      if (prompting.complexity_tier !== undefined) {
+        const allowedTier = new Set(['tier1','tier2','tier3']);
+        requireEnum(prompting.complexity_tier, allowedTier, 'prompting.complexity_tier');
+      }
+      if (prompting.prompt_modules !== undefined) {
+        req(Array.isArray(prompting.prompt_modules), 'prompting.prompt_modules must be an array when provided.');
+        if (Array.isArray(prompting.prompt_modules)) {
+          prompting.prompt_modules.forEach((entry, idx) => {
+            req(isNonEmptyString(entry), `prompting.prompt_modules[${idx}] must be a non-empty string.`);
+          });
+        }
+      }
+      if (prompting.examples_strategy !== undefined) {
+        req(isNonEmptyString(prompting.examples_strategy), 'prompting.examples_strategy must be a non-empty string.');
+      }
+    }
+  }
+
+  const security = blueprint.security;
+  if (security !== undefined) {
+    req(isObject(security), 'security must be an object when provided.');
+    if (isObject(security)) {
+      if (security.approval_points !== undefined) {
+        req(Array.isArray(security.approval_points), 'security.approval_points must be an array when provided.');
+        if (Array.isArray(security.approval_points)) {
+          security.approval_points.forEach((entry, idx) => {
+            req(isNonEmptyString(entry), `security.approval_points[${idx}] must be a non-empty string.`);
+          });
+        }
+      }
+      if (security.permissions !== undefined) req(isNonEmptyString(security.permissions), 'security.permissions must be a non-empty string.');
+      if (security.threats !== undefined) req(isNonEmptyString(security.threats), 'security.threats must be a non-empty string.');
+    }
+  }
+
+  const lifecycle = blueprint.lifecycle;
+  if (lifecycle !== undefined) {
+    req(isObject(lifecycle), 'lifecycle must be an object when provided.');
+    if (isObject(lifecycle)) {
+      if (lifecycle.versioning !== undefined) req(isNonEmptyString(lifecycle.versioning), 'lifecycle.versioning must be a non-empty string.');
+      if (lifecycle.migration_notes !== undefined) req(isNonEmptyString(lifecycle.migration_notes), 'lifecycle.migration_notes must be a non-empty string.');
+      if (lifecycle.deprecation !== undefined) req(isNonEmptyString(lifecycle.deprecation), 'lifecycle.deprecation must be a non-empty string.');
+    }
+  }
+
+  if (del.non_goals !== undefined) {
+    req(Array.isArray(del.non_goals), 'deliverables.non_goals must be an array when provided.');
+    if (Array.isArray(del.non_goals)) {
+      del.non_goals.forEach((entry, idx) => {
+        req(isNonEmptyString(entry), `deliverables.non_goals[${idx}] must be a non-empty string.`);
+      });
+    }
+  }
 
   return { ok: errors.length === 0, errors, warnings };
 }
@@ -364,7 +803,7 @@ function planScaffold(repoRoot, blueprint) {
   // docs (generated)
   const docFiles = ['overview.md','integration.md','configuration.md','dataflow.md','runbook.md','evaluation.md'];
   for (const f of docFiles) {
-    ops.push({ action: 'write', path: path.join(docsRoot, f) });
+    ops.push({ action: 'write', path: path.join(docsRoot, 'doc', f) });
   }
 
   return { ops, moduleRoot, docsRoot, registryPath };
@@ -877,7 +1316,7 @@ function cmdApply(args) {
   // docs generation
   const docs = renderDocs(bp);
   for (const [name, content] of Object.entries(docs)) {
-    writeText(path.join(plan.docsRoot, name), content + '\n', true, false);
+    writeText(path.join(plan.docsRoot, 'doc', name), content + '\n', true, false);
   }
 
   // registry update
