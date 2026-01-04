@@ -1,6 +1,6 @@
-# Agent guidance for this init kit
+# Agent guidance for the init kit
 
-This repository includes an `init/` bootstrap kit that is intended to be executed in a **checkpointed** manner.
+The repository includes an `init/` bootstrap kit that is intended to be executed in a **checkpointed** manner.
 
 Key principles:
 
@@ -30,7 +30,7 @@ Run `start` to begin initialization. This automatically creates all templates:
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs start --repo-root .
 ```
 
-This creates:
+The command creates:
 - `init/stage-a-docs/` - Stage A doc templates:
   - `requirements.md`
   - `non-functional-requirements.md`
@@ -106,7 +106,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
   --repo-root . --apply --i-understand --archive
 ```
 
-This archives Stage A docs and blueprint from `init/` to `docs/project/` before removing `init/`.
+The command archives Stage A docs and blueprint from `init/` to `docs/project/` before removing `init/`.
 
 **Option C: Archive all + prune unused add-ons**
 

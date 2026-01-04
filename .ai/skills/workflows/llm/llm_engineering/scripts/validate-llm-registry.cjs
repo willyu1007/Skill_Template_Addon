@@ -4,7 +4,7 @@
  * LLM Registry Validator
  *
  * Validates the repo's LLM SSOT registries under:
- *   .ai/llm/registry/*
+ *   .ai/llm-config/registry/*
  *
  * Goals:
  * - lightweight, dependency-free validation (no YAML library)
@@ -65,7 +65,7 @@ function uniqueList(list) {
 function findRepoRoot(startDir) {
   let dir = startDir;
   while (true) {
-    const candidate = path.join(dir, '.ai', 'llm', 'registry', 'config_keys.yaml');
+    const candidate = path.join(dir, '.ai', 'llm-config', 'registry', 'config_keys.yaml');
     if (fs.existsSync(candidate)) return dir;
     const parent = path.dirname(dir);
     if (parent === dir) return null;
@@ -210,10 +210,10 @@ function main() {
 
   const repoRoot = findRepoRoot(__dirname);
   if (!repoRoot) {
-    die('Unable to locate repo root (expected `.ai/llm/registry/config_keys.yaml`).');
+    die('Unable to locate repo root (expected `.ai/llm-config/registry/config_keys.yaml`).');
   }
 
-  const registryDir = path.join(repoRoot, '.ai', 'llm', 'registry');
+  const registryDir = path.join(repoRoot, '.ai', 'llm-config', 'registry');
   const files = {
     providers: path.join(registryDir, 'providers.yaml'),
     profiles: path.join(registryDir, 'model_profiles.yaml'),
@@ -329,4 +329,3 @@ function main() {
 }
 
 main();
-

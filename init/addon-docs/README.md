@@ -1,6 +1,6 @@
 # Add-on Documentation
 
-This directory contains documentation for each optional add-on supported by the init pipeline.
+The directory contains documentation for each optional add-on supported by the init pipeline.
 
 ---
 
@@ -96,8 +96,8 @@ This design is intentional for robustness:
 Because the pipeline does not overwrite existing files, upgrading an already-installed add-on is a deliberate action.
 
 Recommended options:
-- update files manually (reviewed change)
-- or remove the installed files that you want to be replaced, then re-run `apply`
+- Update files manually (reviewed change)
+- Or remove the installed files that you want to be replaced, then re-run `apply`
 
 ---
 

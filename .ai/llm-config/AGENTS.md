@@ -20,15 +20,15 @@ Routing (open exactly one):
 ## SSOT (registries)
 These files are the **single source of truth** for stable identifiers and allowed configuration keys.
 
-- Providers: `.ai/llm/registry/providers.yaml`
-- Model profiles: `.ai/llm/registry/model_profiles.yaml`
-- Prompt templates: `.ai/llm/registry/prompt_templates.yaml`
-- Config/env keys: `.ai/llm/registry/config_keys.yaml`
+- Providers: `.ai/llm-config/registry/providers.yaml`
+- Model profiles: `.ai/llm-config/registry/model_profiles.yaml`
+- Prompt templates: `.ai/llm-config/registry/prompt_templates.yaml`
+- Config/env keys: `.ai/llm-config/registry/config_keys.yaml`
 
 ## Non-negotiables
 1) **Registry-first config**
    - Never introduce new LLM env/config keys ad-hoc.
-   - Register first in `.ai/llm/registry/config_keys.yaml`.
+   - Register first in `.ai/llm-config/registry/config_keys.yaml`.
    - Verify:
      - `node .ai/scripts/check-llm-config-keys.cjs`
 

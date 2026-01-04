@@ -1,12 +1,12 @@
 # LLM Initialization Guide
 
-This document provides **step-by-step guidance** for an AI assistant to help a user complete project initialization using this init kit.
+The document provides **step-by-step guidance** for an AI assistant to help a user complete project initialization using the init kit.
 
 > **Relationship with `conversation-prompts.md`**:
-> - **This file (llm-init-guide.md)**: End-to-end process guide with phase-by-phase instructions
+> - **The llm-init-guide.md file**: End-to-end process guide with phase-by-phase instructions
 > - **conversation-prompts.md**: Question bank and modular prompts for the requirements interview
 > 
-> Use this file for the overall flow; reference conversation-prompts.md for detailed question templates.
+> Use llm-init-guide.md for the overall flow; reference conversation-prompts.md for detailed question templates.
 
 ---
 

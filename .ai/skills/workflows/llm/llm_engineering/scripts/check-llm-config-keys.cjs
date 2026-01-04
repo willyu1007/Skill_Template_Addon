@@ -4,7 +4,7 @@
  * LLM Config Key Registry Check
  *
  * Enforces that in-scope LLM env/config keys referenced in code are registered in:
- *   .ai/llm/registry/config_keys.yaml
+ *   .ai/llm-config/registry/config_keys.yaml
  *
  * Why:
  * - prevents ad-hoc / duplicated configuration keys
@@ -62,7 +62,7 @@ function findRepoRoot(startDir) {
   // Walk up until we find the expected registry path.
   let dir = startDir;
   for (let i = 0; i < 50; i++) {
-    const candidate = path.join(dir, '.ai', 'llm', 'registry', 'config_keys.yaml');
+    const candidate = path.join(dir, '.ai', 'llm-config', 'registry', 'config_keys.yaml');
     if (fs.existsSync(candidate)) return dir;
     const parent = path.dirname(dir);
     if (parent === dir) break;
@@ -224,10 +224,10 @@ function main() {
 
   const repoRoot = findRepoRoot(__dirname);
   if (!repoRoot) {
-    die('Unable to locate repo root: expected `.ai/llm/registry/config_keys.yaml` in an ancestor directory.');
+    die('Unable to locate repo root: expected `.ai/llm-config/registry/config_keys.yaml` in an ancestor directory.');
   }
 
-  const registryPath = path.join(repoRoot, '.ai', 'llm', 'registry', 'config_keys.yaml');
+  const registryPath = path.join(repoRoot, '.ai', 'llm-config', 'registry', 'config_keys.yaml');
   if (!fs.existsSync(registryPath)) {
     die(`Missing registry: ${registryPath}`);
   }
@@ -293,7 +293,7 @@ function main() {
       }
     }
     console.log('');
-    console.log('Fix: register keys in `.ai/llm/registry/config_keys.yaml` and re-run this check.');
+    console.log('Fix: register keys in `.ai/llm-config/registry/config_keys.yaml` and re-run this check.');
     process.exit(1);
   }
 
@@ -301,4 +301,3 @@ function main() {
 }
 
 main();
-

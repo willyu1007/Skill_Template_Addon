@@ -2,9 +2,9 @@
 
 ## Conclusions (read first)
 
-- Use this checklist **before** declaring a stage complete.
+- Use the checklist **before** declaring a stage complete.
 - AI MUST answer each question honestly. If any answer is "No", iterate with the user before proceeding.
-- This checklist is for **semantic quality**, not structural completeness (use `check-docs` for that).
+- The checklist is for **semantic quality**, not structural completeness (use `check-docs` for that).
 
 ---
 
@@ -29,7 +29,7 @@ Run this checklist after drafting all Stage A docs, **before** requesting user a
 - [ ] Does each MUST requirement have a **testable** acceptance criterion?
 - [ ] Are MUST requirements **independent** (not duplicating each other)?
 - [ ] Are there **3-10** MUST requirements (not too few, not too many)?
-- [ ] Would a developer know when this requirement is "done"?
+- [ ] Would a developer know when the requirement is "done"?
 
 ### A4. Out-of-Scope (OUT)
 
@@ -67,7 +67,7 @@ Run this checklist after drafting all Stage A docs, **before** requesting user a
 
 ## Stage B: Blueprint Quality Checklist
 
-Run this checklist after drafting `project-blueprint.json`, **before** requesting user approval.
+Run the checklist after drafting `project-blueprint.json`, **before** requesting user approval.
 
 ### B1. Consistency with Stage A
 
@@ -100,7 +100,7 @@ Run this checklist after drafting `project-blueprint.json`, **before** requestin
 
 ## Stage C: Scaffold Quality Checklist
 
-Run this checklist after `apply` command, **before** cleanup.
+Run the checklist after `apply` command, **before** cleanup.
 
 ### C1. Scaffold Structure
 
@@ -123,9 +123,9 @@ Run this checklist after `apply` command, **before** cleanup.
 
 ---
 
-## How to Use This Checklist
+## How to Use the Checklist
 
-1. After completing each stage, open this checklist.
+1. After completing each stage, open the checklist.
 2. Answer each question honestly (Yes/No).
 3. If any answer is **No**:
    - Identify the gap.
@@ -135,7 +135,7 @@ Run this checklist after `apply` command, **before** cleanup.
 
 ## Verification
 
-- Stage A: `check-docs --strict` should pass AND this checklist should pass.
-- Stage B: `validate` should pass AND this checklist should pass.
-- Stage C: `apply` should complete AND this checklist should pass.
+- Stage A: `check-docs --strict` should pass AND the quality checklist should pass.
+- Stage B: `validate` should pass AND the quality checklist should pass.
+- Stage C: `apply` should complete AND the quality checklist should pass.
 

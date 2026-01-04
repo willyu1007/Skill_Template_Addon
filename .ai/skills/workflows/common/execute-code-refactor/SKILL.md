@@ -15,7 +15,7 @@ Use this skill when:
 - Updating imports after moves
 - Standardizing repeated patterns across the codebase
 
-Avoid using this skill when:
+Avoid using the skill when:
 - You only need a refactor plan (use a planning workflow)
 - The task is primarily behavior changes rather than structural refactor
 

@@ -2,7 +2,7 @@
 
 ## Conclusions (read first)
 
-- This add-on provides a **database schema mirroring** system under `db/`.
+- The add-on provides a **database schema mirroring** system under `db/`.
 - Real databases are the **single source of truth**; the repository holds structured mirrors.
 - AI/LLM uses these mirrors to understand schema, propose changes, and plan migrations.
 - All database operations go through scripts - no direct database manipulation by AI.
@@ -94,7 +94,7 @@ If the context-awareness add-on is enabled, sync the mirror into `docs/context/`
 node .ai/scripts/dbctl.js sync-to-context
 ```
 
-This updates `docs/context/db/schema.json` and refreshes the registry checksum so `contextctl verify` passes.
+The command updates `docs/context/db/schema.json` and refreshes the registry checksum so `contextctl verify` passes.
 
 ### Environment Configuration
 

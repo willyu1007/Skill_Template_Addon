@@ -1,6 +1,6 @@
 ---
 name: plan-maker
-description: Create a goal-aligned implementation plan (dev/active/<task>/plan.md) by asking clarifying questions when needed; planning only (no code changes).
+description: Create a goal-aligned macro-level roadmap (dev-docs/active/<task>/roadmap.md) by asking clarifying questions when needed; planning only (no code changes).
 category: workflows/planning
 ssot_path: .ai/skills/workflows/planning/plan-maker
 ---

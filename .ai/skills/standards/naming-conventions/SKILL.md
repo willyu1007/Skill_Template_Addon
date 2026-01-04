@@ -1,6 +1,6 @@
 ---
 name: naming-conventions
-description: Apply consistent naming conventions for directories, files, and identifiers - covers kebab-case rules, SSOT layout, and skill naming standards.
+description: Apply consistent naming conventions for directories, files, and identifiers - covers kebab-case rules, SSOT layout, skill naming standards, and script-generated file paths (including temporary files under .ai/.tmp/).
 ---
 
 # Naming Conventions
@@ -19,6 +19,14 @@ Use this skill when:
 - Naming skills, workflows, or commands
 - Reviewing code for naming consistency
 - Setting up CI checks for naming standards
+- **Scripts generating files**: scripts that create new files/directories MUST read this skill first
+
+### For Scripts
+
+If your script generates files or directories, import or reference this skill to ensure consistent naming:
+- Skill path: `.ai/skills/standards/naming-conventions/SKILL.md`
+- Apply kebab-case rules to all generated paths
+- Validate output names against the conventions before writing
 
 ## Inputs
 
@@ -55,6 +63,8 @@ Use this skill when:
   - `.ai/skills/` (skills and workflows live here)
   - `.ai/scripts/` (maintenance scripts)
   - `.ai/rules/` (if using rules)
+  - `.ai/llm-config/` (LLM configuration and registries)
+  - `.ai/.tmp/` (temporary files, gitignored - see "Temporary Files" section)
 
 ### Skill Entry Stubs
 
@@ -101,6 +111,45 @@ Examples:
 - Workflows are stored as skills
 - Name by intent/process: `refactor-planner`, `release-checklist`
 - Path: `.ai/skills/.../<workflow-name>/SKILL.md`
+
+## Temporary Files and Environments (MUST)
+
+When scripts or workflows need to create temporary files or staging environments:
+
+### Designated Temporary Directory
+
+- **Path**: `.ai/.tmp/`
+- **Purpose**: temporary/intermediate files, staging environments, build artifacts
+- **Lifecycle**: contents may be deleted at any time; do not store persistent data here
+
+### Usage Guidelines
+
+Use `.ai/.tmp/` for:
+- Temporary test environments or sandboxes
+- Intermediate build or generation outputs
+- Staging files before final placement
+- Script-generated scratch data
+
+### Naming within `.ai/.tmp/`
+
+- Use descriptive subdirectories: `.ai/.tmp/<script-name>/`, `.ai/.tmp/<task-name>/`
+- Include timestamps for disambiguation if needed: `.ai/.tmp/build-2024-01-15/`
+- Clean up after task completion when possible
+
+### .gitignore Requirement
+
+Ensure `.ai/.tmp/` is listed in `.gitignore`:
+
+```
+# Temporary files
+.ai/.tmp/
+```
+
+### Boundaries
+
+- Do NOT use project root for temporary files
+- Do NOT create ad-hoc `temp/`, `tmp/`, or `scratch/` directories elsewhere
+- Do NOT commit contents of `.ai/.tmp/` to version control
 
 ## Versioning and Changes (SHOULD)
 

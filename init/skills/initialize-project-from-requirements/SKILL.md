@@ -1,6 +1,6 @@
 # Skill: initialize-project-from-requirements
 
-This skill connects the end-to-end initialization flow:
+The skill connects the end-to-end initialization flow:
 
 `requirements docs -> project blueprint -> scaffold/config generation -> skills sync`
 
@@ -190,7 +190,7 @@ Optional (configuration only; does not trigger installation):
 
 ## `addons/` directory convention (if needed)
 
-This init pipeline supports add-ons in a minimally invasive way:
+The init pipeline supports add-ons in a minimally invasive way:
 
 - Default add-on location: `/addons/context-awareness/payload/`
 - `apply --addons-root <path>` changes the add-on root (for example, `third_party/addons`)
@@ -217,7 +217,7 @@ These are scaffolding placeholders (cloud/CI-agnostic) intended to be extended l
 
 ## LLM-guided initialization
 
-This skill supports an LLM (AI assistant) guiding the user through initialization without requiring the user to manually author configs up-front.
+The skill supports an LLM (AI assistant) guiding the user through initialization without requiring the user to manually author configs up-front.
 
 ### Guidance docs
 

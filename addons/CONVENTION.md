@@ -1,6 +1,6 @@
 # Add-on Convention
 
-This document defines the standard structure and behavior for all add-ons in this template.
+The document below defines the standard structure and behavior for all add-ons in the template.
 
 ## Directory Structure
 
@@ -43,7 +43,7 @@ The `payload/` directory contains all files that will be copied into the target 
 
 - Files are copied only if they don't already exist at the destination
 - Existing files are never overwritten
-- This makes add-on installation safe to re-run (idempotent)
+- The copy-if-missing semantics makes add-on installation safe to re-run (idempotent)
 
 ## Naming Conventions
 

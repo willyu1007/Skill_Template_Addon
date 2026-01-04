@@ -111,7 +111,7 @@ Acceptance criteria:
 
 # Skill Authoring Standards
 
-This section defines the skill authoring standard for this repository.
+The following section defines the skill authoring standard for the repository.
 
 ## Source of Truth (SSOT)
 

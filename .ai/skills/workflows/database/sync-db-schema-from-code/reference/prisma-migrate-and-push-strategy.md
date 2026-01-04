@@ -1,10 +1,10 @@
 # Prisma strategy: migrate (default) vs db push (explicit)
 
-This skill defaults to **Prisma migrate** because it provides versioned, reviewable schema changes via migration files.
+The skill defaults to **Prisma migrate** because Prisma migrate provides versioned, reviewable schema changes via migration files.
 
 ## Decision rule
 - Default: **migrate** (version management)
-- Use **db push** only when the user explicitly chooses it (prototyping, disposable environments, or very small controlled changes).
+- Use **db push** only when the user explicitly chooses db push (prototyping, disposable environments, or very small controlled changes).
 
 ## Migrate (default)
 ### Why migrate
@@ -21,7 +21,7 @@ Pick one:
 - Remote/prod: `migrate deploy` to apply committed migrations.
 
 ## db push (explicit)
-### What it is
+### What db push does
 - Synchronizes the database schema to match `schema.prisma` without generating migration files.
 
 ### Previewing changes

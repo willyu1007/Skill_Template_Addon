@@ -8,7 +8,7 @@ description: Turn one or more knowledge documents into a provider-agnostic Agent
 ## Purpose
 Convert existing knowledge docs (one or many) into **discoverable, reusable Agent Skills** that follow a consistent, lintable structure and **progressive disclosure**.
 
-This skill is provider-agnostic: the output is plain folders + `SKILL.md` files and can be consumed by any agent runtime that discovers skills from the filesystem.
+The generate-skills-from-knowledge skill is provider-agnostic: the output is plain folders + `SKILL.md` files and can be consumed by any agent runtime that discovers skills from the filesystem.
 
 ## When to use
 Use this skill when you have:
@@ -16,7 +16,7 @@ Use this skill when you have:
 - Legacy "how-to" docs that are too long or too project-specific and need to become **portable** skills.
 - Multiple docs with overlapping guidance and you want to **split/merge** them into capability-oriented skills.
 
-Do not use this skill when:
+Do not use the skill when:
 - The source material is confidential and cannot be copied into a work area.
 - You only need a quick summary; you do not need reusable procedures.
 
@@ -80,7 +80,7 @@ The expected outputs are:
 ### Scenario B: Convert docs directly into a repository skills root
 Follow Scenario A, but set `skills_root` to the repository's skills SSOT directory.
 
-If your repo has additional syncing rules (provider stubs, monorepo layouts), treat those as **outside** this skill; this skill only produces the SSOT-format skills.
+If your repo has additional syncing rules (provider stubs, monorepo layouts), treat those as **outside** the skill; generate-skills-from-knowledge only produces the SSOT-format skills.
 
 ## Boundaries
 - You MUST NOT include secrets, credentials, or internal-only URLs in generated skills.

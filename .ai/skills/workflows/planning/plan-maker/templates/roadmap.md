@@ -1,4 +1,4 @@
-# <Task Title> - Implementation Plan
+# <Task Title> - Roadmap
 
 ## Goal
 - <One-sentence goal statement>
@@ -71,25 +71,28 @@
 | <risk> | <low/med/high> | <low/med/high> | <...> | <...> | <...> |
 
 ## Optional detailed documentation layout (convention)
-If you maintain a detailed dev documentation bundle for this task, the repository convention is:
+If you maintain detailed dev documentation for this task, the repository convention is:
 
 ```
-dev/active/<task>/dev-docs/
+dev-docs/active/<task>/
+  roadmap.md              # Macro-level planning (plan-maker)
   00-overview.md
   01-plan.md
   02-architecture.md
   03-implementation-notes.md
   04-verification.md
+  05-pitfalls.md
 ```
 
-This plan document can be used as the macro-level input for that bundle. This skill does not create or update those files.
+The roadmap document can be used as the macro-level input for the implementation docs. The plan-maker skill does not create or update those files.
 
 Suggested mapping:
-- This plan's **Goal/Non-goals/Scope** → `00-overview.md`
-- This plan's **Milestones/Phases** → `01-plan.md`
-- This plan's **Architecture direction (high level)** → `02-architecture.md`
+- The roadmap's **Goal/Non-goals/Scope** → `00-overview.md`
+- The roadmap's **Milestones/Phases** → `01-plan.md`
+- The roadmap's **Architecture direction (high level)** → `02-architecture.md`
 - Decisions/deviations during execution → `03-implementation-notes.md`
-- This plan's **Verification** → `04-verification.md`
+- The roadmap's **Verification** → `04-verification.md`
+- Resolved failures and dead ends → `05-pitfalls.md`
 
 ## To-dos
 - [ ] Confirm open questions

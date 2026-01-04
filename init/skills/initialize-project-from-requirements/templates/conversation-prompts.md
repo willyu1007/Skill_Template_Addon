@@ -2,13 +2,13 @@
 
 > **Relationship with `llm-init-guide.md`**:
 > - **llm-init-guide.md**: End-to-end process guide with phase-by-phase instructions
-> - **This file (conversation-prompts.md)**: Question bank and modular prompts for detailed interviews
+> - **The conversation-prompts.md file**: Question bank and modular prompts for detailed interviews
 > 
-> Use `llm-init-guide.md` for the overall flow; use this file for detailed question templates.
+> Use `llm-init-guide.md` for the overall flow; use conversation-prompts.md for detailed question templates.
 
 ## Conclusions (read first)
 
-- Use this as a **question bank** for Stage A. Ask the **MUST-ask** set first, then use **branch modules** based on the project's capabilities.
+- Use the document as a **question bank** for Stage A. Ask the **MUST-ask** set first, then use **branch modules** based on the project's capabilities.
 - Every answer MUST be written into a file artifact:
   - Stage A docs under `init/stage-a-docs/` during initialization (human-readable SSOT for intent)
   - Stage B blueprint at `init/project-blueprint.json` during initialization (machine-readable SSOT for scaffolding / pack selection)
@@ -19,7 +19,7 @@
 
 ## A. MUST-ask (minimal set)
 
-Ask these before writing the first draft of `docs/project/requirements.md`:
+Ask the following questions before writing the first draft of `docs/project/requirements.md`:
 
 1. **One-line purpose**
    - "In one sentence, what problem does this project solve, for whom, and what is the main outcome?"

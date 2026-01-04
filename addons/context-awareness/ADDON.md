@@ -2,9 +2,9 @@
 
 ## Conclusions (read first)
 
-- This add-on installs a **stable, verifiable project context layer** under `docs/context/` (API, DB schema mapping, BPMN, and additional artifacts).
-- It also provides **environment configuration management** under `docs/context/config/` and `config/environments/`.
-- It provides **project-level scripts** that MUST be used to change this context:
+- The add-on installs a **stable, verifiable project context layer** under `docs/context/` (API, DB schema mapping, BPMN, and additional artifacts).
+- The add-on also provides **environment configuration management** under `docs/context/config/` and `config/environments/`.
+- The add-on provides **project-level scripts** that MUST be used to change the context:
   - `node .ai/scripts/contextctl.js` (context artifacts + registry + environments)
   - `node .ai/scripts/projectctl.js` (project state/config)
   - `node .ai/scripts/skillsctl.js` (skills pack switching + wrapper sync)
@@ -64,7 +64,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 
 ## Environment Configuration
 
-This add-on includes environment configuration management:
+The add-on includes environment configuration management:
 
 ### Environment Registry
 
@@ -144,7 +144,7 @@ Delete these paths (if you want a clean uninstall):
 - `.ai/scripts/skillsctl.js`
 - `.ai/scripts/explain-context-addon.js`
 - `.ai/project/`
-- `.ai/skills/scaffold/` (only if you installed this add-on's scaffold skills)
+- `.ai/skills/scaffold/` (only if you installed the add-on's scaffold skills)
 - `.ai/skills/_meta/packs/context-core.json`
 - `.ai/skills/_meta/packs/scaffold-core.json`
 

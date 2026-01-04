@@ -29,8 +29,7 @@ init/                         # Project bootstrap kit (Stage A/B/C)
 .codex/skills/                # Generated wrappers (DO NOT EDIT)
 .claude/skills/               # Generated wrappers (DO NOT EDIT)
 
-docs/                         # Documentation standards for this template
-dev/                          # Working docs (optional)
+dev-docs/                     # Complex task documentation
 ```
 
 ## Key rules (SSOT + wrappers)

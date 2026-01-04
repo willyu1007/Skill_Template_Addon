@@ -17,7 +17,7 @@ Use this skill when:
 - A task is completed and ready to archive
 
 ## Inputs
-- Task directory (e.g., `dev/active/<task-name>/`)
+- Task directory (e.g., `dev-docs/active/<task-name>/`)
 - Current progress summary
 - Key decisions and tradeoffs
 - What remains to be done
@@ -26,7 +26,7 @@ Use this skill when:
 ## Outputs
 - Updated task docs:
   - progress summary
-  - “what changed” notes
+  - "what changed" notes
   - updated plan (if needed)
   - verification checklist and current status
   - pitfalls / do-not-repeat notes (if any)
@@ -53,7 +53,7 @@ Use this skill when:
    - append resolved failures and dead ends (historical lessons, not current issues)
    - keep the do-not-repeat summary current (fast scan for future contributors)
 7. If status is `done` and verification is complete:
-   - propose moving `dev/active/<task-name>/` to `dev/archive/<task-name>/`
+   - propose moving `dev-docs/active/<task-name>/` to `dev-docs/archive/<task-name>/`
    - obtain approval before moving
 
 ## Verification
@@ -64,7 +64,7 @@ Use this skill when:
 - [ ] `05-pitfalls.md` is updated for any important failures and the summary is current
 - [ ] Handoff docs are sufficient for another contributor to continue
 - [ ] No secrets or credentials in documentation
-- [ ] If archived: task moved to `dev/archive/` after approval
+- [ ] If archived: task moved to `dev-docs/archive/` after approval
 
 ## Boundaries
 - MUST NOT include secrets, credentials, or sensitive data in handoff docs
@@ -72,7 +72,7 @@ Use this skill when:
 - MUST NOT mark tasks as complete without recording verification status
 - MUST NOT delete prior entries from `05-pitfalls.md` (append-only; mark resolved/superseded instead)
 - MUST obtain approval before moving/archiving directories
-- SHOULD NOT leave undocumented “tribal knowledge” that blocks the next contributor
+- SHOULD NOT leave undocumented "tribal knowledge" that blocks the next contributor
 - SHOULD be specific about what works, what is broken, and what to do next
 
 ## Included assets

@@ -19,7 +19,7 @@ Use this skill when the user asks to:
 - sync Prisma or ORM model changes to an actual database
 - verify and resolve schema drift before releasing
 
-Avoid this skill when:
+Avoid the skill when:
 - the user wants to pull/introspect schema from the database back into code (reverse direction)
 - the task is primarily data migration/backfill (separate workflow)
 
@@ -35,21 +35,21 @@ Avoid this skill when:
   - Optional (explicitly chosen): Prisma db push
 
 ## Outputs
-Create an auditable task log under `dev/active/<task>/db/`:
+Create an auditable task log under `dev-docs/active/<task>/db/`:
 - `00-connection-check.md` (no secrets)
 - `01-schema-drift-report.md`
 - `02-migration-plan.md`
 - `03-execution-log.md`
 - `04-post-verify.md`
 
-Optionally, store machine-readable snapshots under `dev/active/<task>/db/artifacts/`.
+Optionally, store machine-readable snapshots under `dev-docs/active/<task>/db/artifacts/`.
 
 ## Steps
 
 ### Phase 0 - Confirm intent and scope
 1. Confirm the user wants **code → target DB** synchronization (not reverse).
 2. Confirm the target environment (dev/staging/prod) and the target DB type.
-3. Propose a `<task>` slug for `dev/active/<task>/` and confirm it.
+3. Propose a `<task>` slug for `dev-docs/active/<task>/` and confirm it.
 
 ### Phase A - Read-only preflight (no DB writes)
 4. Detect the SSOT approach:
@@ -63,10 +63,10 @@ Optionally, store machine-readable snapshots under `dev/active/<task>/db/artifac
    - Record a **redacted** connection summary in `00-connection-check.md`
 
 6. Validate connectivity using the included script:
-   - `python3 ./scripts/db_connect_check.py --url "$DATABASE_URL" --out "dev/active/<task>/db/00-connection-check.md"`
+   - `python3 ./scripts/db_connect_check.py --url "$DATABASE_URL" --out "dev-docs/active/<task>/db/00-connection-check.md"`
 
 7. Capture a schema snapshot (for SQLite; for other DBs if drivers are available):
-   - `python3 ./scripts/db_schema_snapshot.py --url "$DATABASE_URL" --out "dev/active/<task>/db/artifacts/schema_snapshot.json"`
+   - `python3 ./scripts/db_schema_snapshot.py --url "$DATABASE_URL" --out "dev-docs/active/<task>/db/artifacts/schema_snapshot.json"`
 
 8. Produce a **diff preview** (no writes):
    - Prisma (default migrate):
@@ -111,7 +111,7 @@ Optionally, store machine-readable snapshots under `dev/active/<task>/db/artifac
 - [ ] Diff preview produced and reviewed before applying changes
 - [ ] Strategy is explicit (default migrate; push only if explicitly chosen)
 - [ ] Approval gate was respected before any DB writes
-- [ ] Execution log and post-verification evidence are saved under `dev/active/<task>/db/`
+- [ ] Execution log and post-verification evidence are saved under `dev-docs/active/<task>/db/`
 
 ## Boundaries
 - MUST NOT run reverse sync (DB → code) as the primary workflow

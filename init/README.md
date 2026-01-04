@@ -1,8 +1,8 @@
 # Init kit (robust 3-stage pipeline)
 
-> Human-facing documentation. If you are an LLM/AI assistant, skip this file to save tokens and follow `init/AGENTS.md` instead.
+> Human-facing documentation. If you are an LLM/AI assistant, skip the file to save tokens and follow `init/AGENTS.md` instead.
 
-This `init/` package provides a 3-stage, checkpointed workflow to bootstrap a repository from requirements:
+The `init/` package provides a 3-stage, checkpointed workflow to bootstrap a repository from requirements:
 
 - **Stage A**: Requirements docs (working location: `init/stage-a-docs/`)
 - **Stage B**: Blueprint (working location: `init/project-blueprint.json`)
@@ -24,7 +24,7 @@ It is designed for **robustness and auditability**:
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs start --repo-root .
 ```
 
-This creates:
+The command creates:
 - `init/stage-a-docs/` - Stage A document templates
 - `init/project-blueprint.json` - Blueprint template
 - `init/.init-state.json` - State tracking file
@@ -88,7 +88,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
   --archive
 ```
 
-This archives Stage A docs and blueprint to `docs/project/`, then removes `init/`.
+The command archives Stage A docs and blueprint to `docs/project/`, then removes `init/`.
 
 **Option C: Archive + prune unused add-ons** (recommended for minimal final repo)
 
@@ -101,7 +101,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
   --cleanup-addons
 ```
 
-This archives files, removes `init/`, and deletes add-on source directories under `addons/` that were not enabled in the blueprint.
+The command archives files, removes `init/`, and deletes add-on source directories under `addons/` that were not enabled in the blueprint.
 
 ---
 
@@ -195,7 +195,7 @@ See:
 
 ## LLM-Guided Initialization
 
-This init kit supports an AI assistant guiding users through the full initialization workflow.
+The init kit supports an AI assistant guiding users through the full initialization workflow.
 
 ### Flow
 
@@ -242,7 +242,7 @@ When add-ons are enabled, they provide more complete implementations with manage
 
 ---
 
-## Files in this init kit
+## Files in the init kit
 
 - `stages/` - stage guidance docs
 - `skills/initialize-project-from-requirements/` - the skill definition and scripts
