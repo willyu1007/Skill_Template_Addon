@@ -8,7 +8,6 @@ Optional feature modules installed on-demand during project initialization.
 |--------|---------|----------------|
 | `context-awareness` | API/DB/BPMN contracts for LLM context | `contextctl.js` |
 | `db-mirror` | Database schema mirroring | `dbctl.js` |
-| `ci-templates` | CI/CD configuration templates | `cictl.js` |
 | `packaging` | Container/artifact packaging | `packctl.js` |
 | `deployment` | Multi-environment deployment | `deployctl.js` |
 | `release` | Version and changelog management | `releasectl.js` |
@@ -32,7 +31,7 @@ Add-ons are enabled via `project-blueprint.json`:
   "addons": {
     "contextAwareness": true,
     "dbMirror": false,
-    "ciTemplates": true
+    "packaging": true
   }
 }
 ```
@@ -45,4 +44,3 @@ Installation occurs during `init-pipeline.cjs apply`.
 - Use control scripts (`*ctl.js`) for runtime management
 - Payloads use copy-if-missing semantics (idempotent)
 - Do not modify installed files directly; re-run control scripts
-

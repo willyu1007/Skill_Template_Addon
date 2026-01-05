@@ -195,7 +195,6 @@ Recommend add-ons based on `capabilities` in the blueprint. See **Module D** in 
 |----------|---------------------|
 | `api.style != "none"` or `database.enabled` or `bpmn.enabled` | `contextAwareness` |
 | `database.enabled: true` | `dbMirror` |
-| `quality.ci.enabled: true` | `ciTemplates` |
 | Needs containerization | `packaging` |
 | Needs multi-environment deployment | `deployment` |
 | Needs versioning/changelog workflows | `release` |
@@ -208,7 +207,6 @@ Based on your project needs, I recommend these add-ons:
 
 1. ✅ context-awareness - your project has an API and a database
 2. ✅ db-mirror - database schema management
-3. ❓ ci-templates - do you need CI/CD configuration?
 
 Do you want to enable these add-ons?
 ```
@@ -418,8 +416,6 @@ check capabilities
 │   └── recommended: dbMirror
 ├── bpmn.enabled
 │   └── recommended: contextAwareness
-├── quality.ci.enabled
-│   └── recommended: ciTemplates
 └── devops needs
     ├── containerization → packaging
     ├── multi-environment → deployment
@@ -476,7 +472,6 @@ AI: Great. I'll generate the project blueprint. Based on your needs, I recommend
 Recommended add-ons:
 - ✅ context-awareness (API/database contract management)
 - ✅ db-mirror (database schema management)
-- ❓ ci-templates (CI/CD configuration)
 
 Do you want to confirm this configuration?
 ```

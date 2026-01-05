@@ -136,7 +136,6 @@ This init kit supports multiple optional add-ons:
 |--------|-----------------|---------|
 | Context Awareness | `addons.contextAwareness` | API/DB/BPMN contracts for LLM |
 | DB Mirror | `addons.dbMirror` | Database schema mirroring |
-| CI Templates | `addons.ciTemplates` | CI/CD configuration |
 | Packaging | `addons.packaging` | Container/artifact packaging |
 | Deployment | `addons.deployment` | Multi-environment deployment |
 | Release | `addons.release` | Version/changelog management |
@@ -151,7 +150,6 @@ In `project-blueprint.json`:
   "addons": {
     "contextAwareness": true,
     "dbMirror": true,
-    "ciTemplates": true,
     "packaging": true,
     "deployment": true,
     "release": true,
@@ -166,7 +164,7 @@ In `project-blueprint.json`:
 {
   "addons": {
     "dbMirror": true,          // ← triggers db-mirror add-on installation
-    "ciTemplates": true        // ← triggers ci-templates add-on installation
+    "packaging": true          // ← triggers packaging add-on installation
   },
   "db": {
     "kind": "postgres",        // ← configuration only, does NOT trigger installation

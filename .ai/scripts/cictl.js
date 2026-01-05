@@ -2,22 +2,26 @@
 /**
  * cictl.js
  *
- * CI/CD configuration management for the ci-templates add-on.
+ * CI configuration helper for skill workflows.
  *
  * Commands:
  *   init              Initialize CI configuration (idempotent)
- *   list              List available CI templates
- *   apply             Apply a CI template
  *   verify            Verify CI configuration
  *   status            Show current CI status
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // ============================================================================
 // CLI Argument Parsing
 // ============================================================================
+
+const SUPPORTED_PROVIDERS = ['github', 'gitlab'];
 
 function usage(exitCode = 0) {
   const msg = `
@@ -27,19 +31,9 @@ Usage:
 Commands:
   init
     --repo-root <path>          Repo root (default: cwd)
+    --provider <github|gitlab>  CI provider to configure (copies starter template)
     --dry-run                   Show what would be created
     Initialize CI configuration skeleton.
-
-  list
-    --repo-root <path>          Repo root (default: cwd)
-    --format <text|json>        Output format (default: text)
-    List available CI templates.
-
-  apply
-    --template <string>         Template to apply (required)
-    --repo-root <path>          Repo root (default: cwd)
-    --force                     Overwrite existing files
-    Apply a CI template.
 
   verify
     --repo-root <path>          Repo root (default: cwd)
@@ -52,9 +46,10 @@ Commands:
 
 Examples:
   node .ai/scripts/cictl.js init
-  node .ai/scripts/cictl.js list
-  node .ai/scripts/cictl.js apply --template github-actions
+  node .ai/scripts/cictl.js init --provider github
+  node .ai/scripts/cictl.js init --provider gitlab
   node .ai/scripts/cictl.js verify
+  node .ai/scripts/cictl.js status
 `;
   console.log(msg.trim());
   process.exit(exitCode);
@@ -137,8 +132,7 @@ function getConfigPath(repoRoot) {
 function loadConfig(repoRoot) {
   return readJson(getConfigPath(repoRoot)) || {
     version: 1,
-    provider: null,
-    templates: []
+    provider: null
   };
 }
 
@@ -146,31 +140,67 @@ function saveConfig(repoRoot, config) {
   writeJson(getConfigPath(repoRoot), config);
 }
 
-const TEMPLATES = {
-  'github-actions': {
-    name: 'GitHub Actions',
-    files: ['.github/workflows/ci.yml'],
-    description: 'GitHub Actions CI/CD workflow'
-  },
-  'gitlab-ci': {
-    name: 'GitLab CI',
-    files: ['.gitlab-ci.yml'],
-    description: 'GitLab CI/CD pipeline'
-  },
-  'azure-pipelines': {
-    name: 'Azure Pipelines',
-    files: ['azure-pipelines.yml'],
-    description: 'Azure DevOps pipeline'
+// ============================================================================
+// Provider Template Paths
+// ============================================================================
+
+function getSkillTemplatePath(provider) {
+  // __dirname is .ai/scripts/, so we go up one level to .ai/ then into skills/
+  const skillsBase = path.join(__dirname, '..', 'skills', 'testing');
+  if (provider === 'github') {
+    return path.join(skillsBase, 'test-ci-github-actions', 'reference', 'templates', 'github-actions', 'ci.yml');
+  } else if (provider === 'gitlab') {
+    return path.join(skillsBase, 'test-ci-gitlab-ci', 'reference', 'templates', 'gitlab-ci', '.gitlab-ci.yml');
   }
-};
+  return null;
+}
+
+function getProviderDestPath(repoRoot, provider) {
+  if (provider === 'github') {
+    return path.join(repoRoot, '.github', 'workflows', 'ci.yml');
+  } else if (provider === 'gitlab') {
+    return path.join(repoRoot, '.gitlab-ci.yml');
+  }
+  return null;
+}
+
+function copyProviderTemplate(repoRoot, provider, dryRun) {
+  const srcPath = getSkillTemplatePath(provider);
+  const destPath = getProviderDestPath(repoRoot, provider);
+
+  if (!srcPath || !destPath) {
+    return { op: 'skip', path: destPath, reason: 'unknown provider' };
+  }
+
+  if (!fs.existsSync(srcPath)) {
+    return { op: 'skip', path: destPath, reason: `template not found: ${srcPath}` };
+  }
+
+  if (fs.existsSync(destPath)) {
+    return { op: 'skip', path: destPath, reason: 'exists' };
+  }
+
+  if (dryRun) {
+    return { op: 'copy', path: destPath, from: srcPath, mode: 'dry-run' };
+  }
+
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  fs.copyFileSync(srcPath, destPath);
+  return { op: 'copy', path: destPath, from: srcPath };
+}
 
 // ============================================================================
 // Commands
 // ============================================================================
 
-function cmdInit(repoRoot, dryRun) {
+function cmdInit(repoRoot, provider, dryRun) {
   const ciDir = getCiDir(repoRoot);
   const actions = [];
+
+  // Validate provider if specified
+  if (provider && !SUPPORTED_PROVIDERS.includes(provider)) {
+    die(`[error] Unsupported provider: ${provider}. Supported: ${SUPPORTED_PROVIDERS.join(', ')}`);
+  }
 
   // Create directories
   const dirs = [ciDir, path.join(ciDir, 'workdocs')];
@@ -184,11 +214,29 @@ function cmdInit(repoRoot, dryRun) {
 
   // Create config
   const configPath = getConfigPath(repoRoot);
-  if (!fs.existsSync(configPath) && !dryRun) {
-    saveConfig(repoRoot, { version: 1, provider: null, templates: [] });
-    actions.push({ op: 'write', path: configPath });
-  } else if (dryRun) {
-    actions.push({ op: 'write', path: configPath, mode: 'dry-run' });
+  const existingConfig = readJson(configPath);
+  const newConfig = {
+    version: 1,
+    provider: provider || (existingConfig ? existingConfig.provider : null)
+  };
+
+  if (!fs.existsSync(configPath)) {
+    if (!dryRun) {
+      saveConfig(repoRoot, newConfig);
+      actions.push({ op: 'write', path: configPath });
+    } else {
+      actions.push({ op: 'write', path: configPath, mode: 'dry-run' });
+    }
+  } else if (provider && existingConfig && existingConfig.provider !== provider) {
+    // Update provider if explicitly specified and different
+    if (!dryRun) {
+      saveConfig(repoRoot, newConfig);
+      actions.push({ op: 'update', path: configPath, note: `provider: ${provider}` });
+    } else {
+      actions.push({ op: 'update', path: configPath, note: `provider: ${provider}`, mode: 'dry-run' });
+    }
+  } else {
+    actions.push({ op: 'skip', path: configPath, reason: 'exists' });
   }
 
   // Create AGENTS.md
@@ -198,15 +246,17 @@ function cmdInit(repoRoot, dryRun) {
 ## Commands
 
 \`\`\`bash
-node .ai/scripts/cictl.js list      # List templates
-node .ai/scripts/cictl.js apply --template github-actions
+node .ai/scripts/cictl.js init
+node .ai/scripts/cictl.js init --provider github
+node .ai/scripts/cictl.js init --provider gitlab
 node .ai/scripts/cictl.js verify
+node .ai/scripts/cictl.js status
 \`\`\`
 
 ## Guidelines
 
-- Edit templates in \`ci/\`, not provider-specific files directly
-- Use \`cictl apply\` to generate provider configurations
+- Track CI metadata in \`ci/config.json\`.
+- Edit provider files directly (e.g., \`.github/workflows/\`, \`.gitlab-ci.yml\`).
 `;
 
   if (dryRun) {
@@ -215,48 +265,19 @@ node .ai/scripts/cictl.js verify
     actions.push(writeFileIfMissing(agentsPath, agentsContent));
   }
 
+  // Copy provider template if specified
+  if (provider) {
+    actions.push(copyProviderTemplate(repoRoot, provider, dryRun));
+  }
+
   console.log('[ok] CI configuration initialized.');
   for (const a of actions) {
     const mode = a.mode ? ` (${a.mode})` : '';
     const reason = a.reason ? ` [${a.reason}]` : '';
-    console.log(`  ${a.op}: ${path.relative(repoRoot, a.path)}${mode}${reason}`);
+    const note = a.note ? ` (${a.note})` : '';
+    const from = a.from ? ` <- ${path.relative(repoRoot, a.from)}` : '';
+    console.log(`  ${a.op}: ${path.relative(repoRoot, a.path)}${from}${note}${mode}${reason}`);
   }
-}
-
-function cmdList(repoRoot, format) {
-  if (format === 'json') {
-    console.log(JSON.stringify({ templates: TEMPLATES }, null, 2));
-    return;
-  }
-
-  console.log('Available CI Templates:\n');
-  for (const [id, tmpl] of Object.entries(TEMPLATES)) {
-    console.log(`  ${id}`);
-    console.log(`    ${tmpl.description}`);
-    console.log(`    Files: ${tmpl.files.join(', ')}`);
-    console.log('');
-  }
-}
-
-function cmdApply(repoRoot, template, force) {
-  if (!template) die('[error] --template is required');
-  if (!TEMPLATES[template]) die(`[error] Unknown template: ${template}`);
-
-  const tmpl = TEMPLATES[template];
-  const config = loadConfig(repoRoot);
-
-  console.log(`[info] Applying template: ${tmpl.name}`);
-  console.log('[info] Template files would be created at:');
-  for (const file of tmpl.files) {
-    console.log(`  - ${file}`);
-  }
-
-  config.provider = template;
-  config.templates.push({ id: template, appliedAt: new Date().toISOString() });
-  saveConfig(repoRoot, config);
-
-  console.log(`\n[ok] Template "${template}" applied.`);
-  console.log('[info] Note: Actual workflow files need to be created manually or from template.');
 }
 
 function cmdVerify(repoRoot) {
@@ -265,11 +286,32 @@ function cmdVerify(repoRoot) {
   const warnings = [];
 
   if (!config.provider) {
-    warnings.push('No CI provider configured. Run: cictl apply --template <name>');
+    warnings.push('No CI provider configured. Run: cictl init --provider <github|gitlab>');
   }
 
   if (!fs.existsSync(getCiDir(repoRoot))) {
     errors.push('ci/ directory not found. Run: cictl init');
+  }
+  if (!fs.existsSync(getConfigPath(repoRoot))) {
+    errors.push('ci/config.json not found. Run: cictl init');
+  }
+
+  // Check provider-specific files
+  if (config.provider === 'github') {
+    const workflowDir = path.join(repoRoot, '.github', 'workflows');
+    if (!fs.existsSync(workflowDir)) {
+      warnings.push('.github/workflows/ directory not found. Run: cictl init --provider github');
+    } else {
+      const workflows = fs.readdirSync(workflowDir).filter(f => f.endsWith('.yml') || f.endsWith('.yaml'));
+      if (workflows.length === 0) {
+        warnings.push('No workflow files found in .github/workflows/');
+      }
+    }
+  } else if (config.provider === 'gitlab') {
+    const gitlabCi = path.join(repoRoot, '.gitlab-ci.yml');
+    if (!fs.existsSync(gitlabCi)) {
+      warnings.push('.gitlab-ci.yml not found. Run: cictl init --provider gitlab');
+    }
   }
 
   if (errors.length > 0) {
@@ -290,8 +332,7 @@ function cmdStatus(repoRoot, format) {
   const config = loadConfig(repoRoot);
   const status = {
     initialized: fs.existsSync(getCiDir(repoRoot)),
-    provider: config.provider,
-    templates: config.templates || []
+    provider: config.provider
   };
 
   if (format === 'json') {
@@ -302,7 +343,6 @@ function cmdStatus(repoRoot, format) {
   console.log('CI Status:');
   console.log(`  Initialized: ${status.initialized ? 'yes' : 'no'}`);
   console.log(`  Provider: ${status.provider || '(none)'}`);
-  console.log(`  Applied templates: ${status.templates.length}`);
 }
 
 // ============================================================================
@@ -313,16 +353,11 @@ function main() {
   const { command, opts } = parseArgs(process.argv);
   const repoRoot = path.resolve(opts['repo-root'] || process.cwd());
   const format = (opts['format'] || 'text').toLowerCase();
+  const provider = opts['provider'] ? opts['provider'].toLowerCase() : null;
 
   switch (command) {
     case 'init':
-      cmdInit(repoRoot, !!opts['dry-run']);
-      break;
-    case 'list':
-      cmdList(repoRoot, format);
-      break;
-    case 'apply':
-      cmdApply(repoRoot, opts['template'], !!opts['force']);
+      cmdInit(repoRoot, provider, !!opts['dry-run']);
       break;
     case 'verify':
       cmdVerify(repoRoot);

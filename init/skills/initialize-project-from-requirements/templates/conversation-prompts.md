@@ -143,16 +143,7 @@ Ask if:
 
 → If YES: Enable `addons.dbMirror: true`
 
-### D3. CI/CD Configuration (ci-templates)
-
-Ask if:
-- "Does this project need standardized CI/CD pipeline configuration?"
-- "Which CI provider? (GitHub Actions, GitLab CI, etc.)"
-- "What CI stages are needed? (lint, test, build, deploy)"
-
-→ If YES: Enable `addons.ciTemplates: true`
-
-### D4. Container/Artifact Packaging (packaging)
+### D3. Container/Artifact Packaging (packaging)
 
 Ask if:
 - "Will this project produce container images (Docker)?"
@@ -161,7 +152,7 @@ Ask if:
 
 → If YES: Enable `addons.packaging: true`
 
-### D5. Multi-Environment Deployment (deployment)
+### D4. Multi-Environment Deployment (deployment)
 
 Ask if:
 - "Does this project deploy to multiple environments (dev/staging/prod)?"
@@ -170,7 +161,7 @@ Ask if:
 
 → If YES: Enable `addons.deployment: true`
 
-### D6. Release/Version Management (release)
+### D5. Release/Version Management (release)
 
 Ask if:
 - "Does this project need automated changelog generation?"
@@ -179,7 +170,7 @@ Ask if:
 
 → If YES: Enable `addons.release: true`
 
-### D7. Observability Contracts (observability)
+### D6. Observability Contracts (observability)
 
 Ask if:
 - "Does this project need metrics/monitoring definitions?"

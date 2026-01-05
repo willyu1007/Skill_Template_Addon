@@ -10,7 +10,6 @@ The directory contains documentation for each optional add-on supported by the i
 |-----------|---------|----------------|---------------|
 | `context-awareness` | API/DB/BPMN contracts for LLM context | `contextctl.js` | [context-awareness.md](context-awareness.md) |
 | `db-mirror` | Database schema mirroring | `dbctl.js` | [db-mirror.md](db-mirror.md) |
-| `ci-templates` | CI/CD configuration templates | `cictl.js` | [ci-templates.md](ci-templates.md) |
 | `packaging` | Container/artifact packaging | `packctl.js` | [packaging.md](packaging.md) |
 | `deployment` | Multi-environment deployment | `deployctl.js` | [deployment.md](deployment.md) |
 | `release` | Version and changelog management | `releasectl.js` | [release.md](release.md) |
@@ -55,7 +54,6 @@ Add-ons are enabled via the `project-blueprint.json`:
   "addons": {
     "contextAwareness": true,
     "dbMirror": true,
-    "ciTemplates": true,
     "packaging": true,
     "deployment": true,
     "release": true,
@@ -112,4 +110,3 @@ To be compatible with this init kit, an add-on payload should:
 5. Include an `init` command that accepts `--repo-root` parameter
 
 See `addons/CONVENTION.md` for the full add-on convention specification.
-

@@ -1,44 +1,41 @@
-# GitLab CI Template (starting point)
+# GitLab CI template (starting point)
 # - Uses canonical pnpm scripts for each suite
 # - Uploads suite artifacts even on failure
 #
-# NOTE: Adjust Node version, secrets, and which jobs are MR-gated for your repo.
+# - Optional: run `node .ai/scripts/cictl.js init` to create `ci/config.json` metadata
+#
+# NOTE: Adjust Node version, variables, and which jobs are MR-gated for your repo.
 
 stages:
   - test
-  - deploy
+  - perf
 
 variables:
   NODE_VERSION: "20"
-  PNPM_VERSION: "8"
 
-# Cache configuration
+# Cache configuration anchor
 .cache-config: &cache-config
-  cache:
-    key:
-      files:
-        - pnpm-lock.yaml
-    paths:
-      - .pnpm-store/
-    policy: pull-push
+  key:
+    files:
+      - pnpm-lock.yaml
+  paths:
+    - .pnpm-store/
+  policy: pull-push
 
-# Base job template for Node.js
-.node-base:
+# Base job template
+.node-setup: &node-setup
   image: node:${NODE_VERSION}
   before_script:
     - corepack enable
-    - corepack prepare pnpm@${PNPM_VERSION} --activate
     - pnpm config set store-dir .pnpm-store
     - pnpm install --frozen-lockfile
-  <<: *cache-config
 
-# =============================================================================
-# API Tests (Newman)
-# =============================================================================
 api-newman:
-  extends: .node-base
+  <<: *node-setup
   stage: test
   timeout: 20 minutes
+  cache:
+    <<: *cache-config
   script:
     - pnpm test:api
   variables:
@@ -48,22 +45,21 @@ api-newman:
     when: always
     paths:
       - artifacts/newman/
+    expire_in: 7 days
     reports:
       junit: artifacts/newman/junit.xml
-    expire_in: 7 days
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
-# =============================================================================
-# Web E2E Tests (Playwright)
-# =============================================================================
 web-playwright:
-  extends: .node-base
+  <<: *node-setup
   stage: test
   timeout: 30 minutes
+  cache:
+    <<: *cache-config
   script:
-    - pnpm exec playwright install --with-deps chromium
+    - pnpm exec playwright install --with-deps
     - pnpm test:e2e:playwright
   variables:
     BASE_URL: ${WEB_BASE_URL}
@@ -71,22 +67,21 @@ web-playwright:
     when: always
     paths:
       - artifacts/playwright/
+    expire_in: 7 days
     reports:
       junit: artifacts/playwright/junit.xml
-    expire_in: 7 days
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
-# =============================================================================
-# Performance Tests (k6 smoke)
-# =============================================================================
 perf-k6-smoke:
-  stage: test
+  stage: perf
   image: grafana/k6:latest
   timeout: 20 minutes
-  script:
+  # Recommended: keep k6 smoke in MR; heavier perf suites should be scheduled.
+  before_script:
     - mkdir -p artifacts/k6
+  script:
     - k6 run tests/perf/k6/scripts/smoke.js --summary-export artifacts/k6/summary.json
   variables:
     BASE_URL: ${API_BASE_URL}
@@ -100,14 +95,13 @@ perf-k6-smoke:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
-# =============================================================================
-# Web E2E Tests (Cypress) - Optional
-# =============================================================================
+# Optional: Cypress job (enable only if you gate on Cypress)
 # web-cypress:
-#   extends: .node-base
+#   <<: *node-setup
 #   stage: test
-#   image: cypress/browsers:node-20.9.0-chrome-118.0.5993.88-1-ff-118.0.2-edge-118.0.2088.46-1
 #   timeout: 30 minutes
+#   cache:
+#     <<: *cache-config
 #   script:
 #     - pnpm test:e2e:cypress
 #   variables:
@@ -120,46 +114,3 @@ perf-k6-smoke:
 #   rules:
 #     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 #     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-
-# =============================================================================
-# Mobile Tests (Detox) - Scheduled/Manual only
-# =============================================================================
-# mobile-detox:
-#   stage: test
-#   tags:
-#     - macos  # Requires macOS runner for iOS
-#   timeout: 45 minutes
-#   script:
-#     - pnpm install --frozen-lockfile
-#     - pnpm test:mobile:detox:build
-#     - pnpm test:mobile:detox
-#   artifacts:
-#     when: always
-#     paths:
-#       - artifacts/detox/
-#     expire_in: 7 days
-#   rules:
-#     - if: $CI_PIPELINE_SOURCE == "schedule"
-#     - if: $CI_PIPELINE_SOURCE == "web"  # Manual trigger
-#       when: manual
-
-# =============================================================================
-# Performance Tests (k6 load) - Scheduled only
-# =============================================================================
-# perf-k6-load:
-#   stage: test
-#   image: grafana/k6:latest
-#   timeout: 60 minutes
-#   script:
-#     - mkdir -p artifacts/k6
-#     - k6 run tests/perf/k6/scripts/load.js --summary-export artifacts/k6/load-summary.json
-#   variables:
-#     BASE_URL: ${STAGING_BASE_URL}
-#     API_TOKEN: ${STAGING_API_TOKEN}
-#   artifacts:
-#     when: always
-#     paths:
-#       - artifacts/k6/
-#     expire_in: 30 days
-#   rules:
-#     - if: $CI_PIPELINE_SOURCE == "schedule"
