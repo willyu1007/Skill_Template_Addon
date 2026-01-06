@@ -79,11 +79,14 @@ node .ai/scripts/dbctl.js verify --env dev
 # Generate a new migration
 node .ai/scripts/dbctl.js generate-migration --name add-user-roles
 
-# List pending migrations
+# List migrations (and per-environment tracking status)
 node .ai/scripts/migrate.js list
 
-# Apply migrations (requires human confirmation for non-dev)
-node .ai/scripts/migrate.js apply --env staging
+# Review what would be applied (script does NOT execute SQL)
+node .ai/scripts/migrate.js plan --env staging
+
+# After a human applies the SQL manually, mark it applied for tracking
+node .ai/scripts/migrate.js mark-applied --migration 20241228120000_add_users.sql --env staging
 ```
 
 ### Context Awareness Bridge (optional)
@@ -94,7 +97,7 @@ If the context-awareness add-on is enabled, sync the mirror into `docs/context/`
 node .ai/scripts/dbctl.js sync-to-context
 ```
 
-The command updates `docs/context/db/schema.json` and refreshes the registry checksum so `contextctl verify` passes.
+The command updates `docs/context/db/schema.json` and (best-effort) runs `contextctl touch` so `contextctl verify` passes.
 
 ### Environment Configuration
 

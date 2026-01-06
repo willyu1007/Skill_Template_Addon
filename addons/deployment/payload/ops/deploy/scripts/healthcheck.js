@@ -78,13 +78,12 @@ Options:
   const result = await checkHealth(url, parseInt(timeout) || 5000);
 
   if (result.ok) {
-    console.log(`✅ Healthy (status: ${result.status})`);
+    console.log(`[ok] Healthy (status: ${result.status})`);
     return 0;
   } else {
-    console.log(`❌ Unhealthy (${result.error || `status: ${result.status}`})`);
+    console.log(`[error] Unhealthy (${result.error || `status: ${result.status}`})`);
     return 1;
   }
 }
 
 main().then(code => process.exit(code));
-

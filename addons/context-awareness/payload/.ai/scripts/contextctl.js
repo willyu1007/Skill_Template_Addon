@@ -11,6 +11,7 @@
  *   touch             Update checksums after editing artifacts
  *   list              List all registered artifacts
  *   verify            Verify context layer consistency
+ *   help              Show help
  *   add-env           Add a new environment
  *   list-envs         List all environments
  *   verify-config     Verify environment configuration
@@ -30,6 +31,9 @@ Usage:
   node .ai/scripts/contextctl.js <command> [options]
 
 Commands:
+  help
+    Show this help.
+
   init
     --repo-root <path>          Repo root (default: cwd)
     --dry-run                   Show what would be created without writing
@@ -37,8 +41,11 @@ Commands:
 
   add-artifact
     --id <string>               Artifact ID (required)
-    --type <openapi|db|bpmn|json|yaml|markdown>  Artifact type (required)
+    --type <openapi|db-schema|db|bpmn|json|yaml|markdown>  Artifact type (required)
     --path <string>             Path to artifact file (required)
+    --mode <contract|generated> Artifact mode (default: contract)
+    --format <string>           Optional format hint (e.g., openapi-3.1)
+    --tags <csv>                Optional tags (comma-separated)
     --repo-root <path>          Repo root (default: cwd)
     Add an artifact to the context registry.
 
@@ -122,6 +129,10 @@ function parseArgs(argv) {
 // File Utilities
 // ============================================================================
 
+function toPosixPath(p) {
+  return String(p).replace(/\\/g, '/');
+}
+
 function resolvePath(base, p) {
   if (!p) return null;
   if (path.isAbsolute(p)) return p;
@@ -159,10 +170,111 @@ function writeFileIfMissing(filePath, content) {
   return { op: 'write', path: filePath };
 }
 
-function computeChecksum(filePath) {
+function computeChecksumSha256(filePath) {
   if (!fs.existsSync(filePath)) return null;
-  const content = fs.readFileSync(filePath, 'utf8');
-  return crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
+  const content = fs.readFileSync(filePath);
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+function looksLikeSha256Hex(v) {
+  return typeof v === 'string' && /^[a-f0-9]{64}$/i.test(v);
+}
+
+function normalizeRegistry(raw) {
+  const now = new Date().toISOString();
+  const version = Number(raw?.version) || 1;
+  const updatedAt = raw?.updatedAt || raw?.lastUpdated || now;
+  const artifacts = Array.isArray(raw?.artifacts) ? raw.artifacts : [];
+
+  const normalizedArtifacts = artifacts
+    .filter((a) => a && typeof a === 'object')
+    .map((a) => {
+      const id = String(a.id || '').trim();
+      const type = String(a.type || '').trim();
+      const artifactPath = String(a.path || '').trim();
+      if (!id || !type || !artifactPath) return null;
+
+      const checksumSha256 =
+        (looksLikeSha256Hex(a.checksumSha256) && a.checksumSha256.toLowerCase()) ||
+        (looksLikeSha256Hex(a.checksum) && a.checksum.toLowerCase()) ||
+        undefined;
+
+      const mode = (String(a.mode || 'contract').trim().toLowerCase() === 'generated') ? 'generated' : 'contract';
+      const format = a.format ? String(a.format) : undefined;
+      const tags = Array.isArray(a.tags) ? a.tags.map((t) => String(t)) : undefined;
+      const lastUpdated = a.lastUpdated || a.addedAt || undefined;
+      const source = a.source && typeof a.source === 'object' ? a.source : undefined;
+
+      return {
+        id,
+        type,
+        path: toPosixPath(artifactPath),
+        mode,
+        ...(format ? { format } : {}),
+        ...(tags ? { tags } : {}),
+        ...(checksumSha256 ? { checksumSha256 } : {}),
+        ...(lastUpdated ? { lastUpdated } : {}),
+        ...(source ? { source } : {})
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    version,
+    updatedAt,
+    artifacts: normalizedArtifacts
+  };
+}
+
+function normalizeEnvRegistry(raw) {
+  const now = new Date().toISOString();
+  const version = Number(raw?.version) || 1;
+  const updatedAt = raw?.updatedAt || raw?.lastUpdated || now;
+  const environments = Array.isArray(raw?.environments) ? raw.environments : [];
+
+  const normalizedEnvs = environments
+    .filter((e) => e && typeof e === 'object')
+    .map((e) => {
+      const id = String(e.id || '').trim();
+      const description = String(e.description || '').trim();
+      if (!id || !description) return null;
+
+      // New schema fields (preferred)
+      if (e.database || e.secrets || e.deployment) {
+        return {
+          id,
+          description,
+          ...(e.database ? { database: e.database } : {}),
+          ...(e.secrets ? { secrets: e.secrets } : {}),
+          ...(e.deployment ? { deployment: e.deployment } : {})
+        };
+      }
+
+      // Legacy mapping from { permissions: { database: { read/write/migrate }, deploy } }
+      const perms = e.permissions || {};
+      const dbPerms = perms.database || {};
+      const deployPerm = perms.deploy;
+
+      const writable = dbPerms.write ?? (id !== 'prod');
+      const migrations = dbPerms.migrate ?? (id !== 'prod');
+      const seedData = id === 'dev';
+      const allowed = deployPerm ?? (id !== 'dev');
+      const approval = id === 'prod' ? 'required' : 'optional';
+
+      return {
+        id,
+        description,
+        database: { writable: !!writable, migrations: migrations === true ? true : !!migrations, seedData },
+        deployment: { allowed: !!allowed, approval }
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    version,
+    updatedAt,
+    environments: normalizedEnvs
+  };
 }
 
 // ============================================================================
@@ -184,35 +296,27 @@ function getEnvRegistryPath(repoRoot) {
 function loadRegistry(repoRoot) {
   const registryPath = getRegistryPath(repoRoot);
   const data = readJson(registryPath);
-  if (!data) {
-    return {
-      version: 1,
-      lastUpdated: new Date().toISOString(),
-      artifacts: []
-    };
-  }
-  return data;
+  if (!data) return normalizeRegistry(null);
+  return normalizeRegistry(data);
 }
 
 function saveRegistry(repoRoot, registry) {
-  registry.lastUpdated = new Date().toISOString();
-  writeJson(getRegistryPath(repoRoot), registry);
+  const normalized = normalizeRegistry(registry);
+  normalized.updatedAt = new Date().toISOString();
+  writeJson(getRegistryPath(repoRoot), normalized);
 }
 
 function loadEnvRegistry(repoRoot) {
   const envRegistryPath = getEnvRegistryPath(repoRoot);
   const data = readJson(envRegistryPath);
-  if (!data) {
-    return {
-      version: 1,
-      environments: []
-    };
-  }
-  return data;
+  if (!data) return normalizeEnvRegistry(null);
+  return normalizeEnvRegistry(data);
 }
 
 function saveEnvRegistry(repoRoot, envRegistry) {
-  writeJson(getEnvRegistryPath(repoRoot), envRegistry);
+  const normalized = normalizeEnvRegistry(envRegistry);
+  normalized.updatedAt = new Date().toISOString();
+  writeJson(getEnvRegistryPath(repoRoot), normalized);
 }
 
 // ============================================================================
@@ -281,7 +385,7 @@ All context changes go through \`contextctl.js\` commands.
   if (!fs.existsSync(registryPath) && !dryRun) {
     const registry = {
       version: 1,
-      lastUpdated: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       artifacts: []
     };
     writeJson(registryPath, registry);
@@ -295,30 +399,25 @@ All context changes go through \`contextctl.js\` commands.
   if (!fs.existsSync(envRegistryPath) && !dryRun) {
     const envRegistry = {
       version: 1,
+      updatedAt: new Date().toISOString(),
       environments: [
         {
           id: 'dev',
           description: 'Local development environment',
-          permissions: {
-            database: { read: true, write: true, migrate: true },
-            deploy: false
-          }
+          database: { writable: true, migrations: true, seedData: true },
+          deployment: { allowed: false, approval: 'none' }
         },
         {
           id: 'staging',
           description: 'Staging/QA environment',
-          permissions: {
-            database: { read: true, write: true, migrate: true },
-            deploy: true
-          }
+          database: { writable: true, migrations: 'review-required', seedData: false },
+          deployment: { allowed: true, approval: 'required' }
         },
         {
           id: 'prod',
           description: 'Production environment',
-          permissions: {
-            database: { read: true, write: false, migrate: false },
-            deploy: true
-          }
+          database: { writable: false, migrations: 'change-request', seedData: false },
+          deployment: { allowed: true, approval: 'required' }
         }
       ]
     };
@@ -331,23 +430,39 @@ All context changes go through \`contextctl.js\` commands.
   // Create registry schema
   const schemaPath = path.join(contextDir, 'registry.schema.json');
   const schemaContent = {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Project Context Registry",
     "type": "object",
-    "required": ["version", "artifacts"],
+    "additionalProperties": false,
+    "required": ["version", "updatedAt", "artifacts"],
     "properties": {
-      "version": { "type": "integer", "minimum": 1 },
-      "lastUpdated": { "type": "string", "format": "date-time" },
+      "version": { "type": "integer", "const": 1 },
+      "updatedAt": { "type": "string", "description": "ISO 8601 timestamp" },
       "artifacts": {
         "type": "array",
         "items": {
           "type": "object",
-          "required": ["id", "type", "path"],
+          "additionalProperties": false,
+          "required": ["id", "type", "path", "mode"],
           "properties": {
-            "id": { "type": "string" },
-            "type": { "type": "string", "enum": ["openapi", "db", "bpmn", "json", "yaml", "markdown"] },
+            "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$" },
+            "type": { "type": "string" },
             "path": { "type": "string" },
-            "checksum": { "type": "string" },
-            "description": { "type": "string" }
+            "mode": { "type": "string", "enum": ["contract", "generated"] },
+            "format": { "type": "string" },
+            "tags": { "type": "array", "items": { "type": "string" } },
+            "checksumSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "lastUpdated": { "type": "string", "description": "ISO 8601 timestamp" },
+            "source": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": { "type": "string", "enum": ["manual", "command"] },
+                "command": { "type": "string" },
+                "cwd": { "type": "string" },
+                "notes": { "type": "string" }
+              }
+            }
           }
         }
       }
@@ -373,14 +488,29 @@ All context changes go through \`contextctl.js\` commands.
   }
 }
 
-function cmdAddArtifact(repoRoot, id, type, artifactPath) {
+function normalizeArtifactType(type) {
+  const t = String(type || '').trim().toLowerCase();
+  if (t === 'db') return 'db-schema';
+  return t;
+}
+
+function parseCsv(csv) {
+  if (!csv) return [];
+  return String(csv)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function cmdAddArtifact(repoRoot, id, type, artifactPath, mode, format, tagsCsv) {
   if (!id) die('[error] --id is required');
   if (!type) die('[error] --type is required');
   if (!artifactPath) die('[error] --path is required');
 
-  const validTypes = ['openapi', 'db', 'bpmn', 'json', 'yaml', 'markdown'];
-  if (!validTypes.includes(type)) {
-    die(`[error] --type must be one of: ${validTypes.join(', ')}`);
+  const normalizedType = normalizeArtifactType(type);
+  const validTypes = ['openapi', 'db-schema', 'bpmn', 'json', 'yaml', 'markdown'];
+  if (!validTypes.includes(normalizedType)) {
+    die(`[error] --type must be one of: ${validTypes.join(', ')} (or legacy alias: db)`);
   }
 
   const fullPath = resolvePath(repoRoot, artifactPath);
@@ -396,19 +526,30 @@ function cmdAddArtifact(repoRoot, id, type, artifactPath) {
     die(`[error] Artifact with id "${id}" already exists. Use remove-artifact first.`);
   }
 
-  const checksum = computeChecksum(fullPath);
-  const relativePath = path.relative(repoRoot, fullPath);
+  const checksumSha256 = computeChecksumSha256(fullPath);
+  const relativePath = toPosixPath(path.relative(repoRoot, fullPath));
+  const now = new Date().toISOString();
+  const normalizedMode = String(mode || 'contract').trim().toLowerCase() === 'generated' ? 'generated' : 'contract';
+  const tags = parseCsv(tagsCsv);
 
   registry.artifacts.push({
     id,
-    type,
+    type: normalizedType,
     path: relativePath,
-    checksum,
-    addedAt: new Date().toISOString()
+    mode: normalizedMode,
+    ...(format ? { format: String(format) } : {}),
+    ...(tags.length > 0 ? { tags } : {}),
+    checksumSha256,
+    lastUpdated: now,
+    source: {
+      kind: 'command',
+      command: 'contextctl add-artifact',
+      cwd: '.'
+    }
   });
 
   saveRegistry(repoRoot, registry);
-  console.log(`[ok] Added artifact: ${id} (${type}) -> ${relativePath}`);
+  console.log(`[ok] Added artifact: ${id} (${normalizedType}) -> ${relativePath}`);
 }
 
 function cmdRemoveArtifact(repoRoot, id) {
@@ -432,10 +573,11 @@ function cmdTouch(repoRoot) {
 
   for (const artifact of registry.artifacts) {
     const fullPath = resolvePath(repoRoot, artifact.path);
-    const newChecksum = computeChecksum(fullPath);
+    const newChecksum = computeChecksumSha256(fullPath);
     
-    if (newChecksum && newChecksum !== artifact.checksum) {
-      artifact.checksum = newChecksum;
+    if (newChecksum && newChecksum !== artifact.checksumSha256) {
+      artifact.checksumSha256 = newChecksum;
+      artifact.lastUpdated = new Date().toISOString();
       updated++;
       console.log(`  [updated] ${artifact.id}: ${newChecksum}`);
     }
@@ -458,7 +600,7 @@ function cmdList(repoRoot, format) {
   }
 
   console.log(`Context Artifacts (${registry.artifacts.length} total):`);
-  console.log(`Last updated: ${registry.lastUpdated || 'unknown'}\n`);
+  console.log(`Updated at: ${registry.updatedAt || 'unknown'}\n`);
 
   if (registry.artifacts.length === 0) {
     console.log('  (no artifacts registered)');
@@ -468,7 +610,8 @@ function cmdList(repoRoot, format) {
   for (const artifact of registry.artifacts) {
     console.log(`  [${artifact.type}] ${artifact.id}`);
     console.log(`    Path: ${artifact.path}`);
-    console.log(`    Checksum: ${artifact.checksum || 'none'}`);
+    console.log(`    Mode: ${artifact.mode}`);
+    console.log(`    Checksum: ${artifact.checksumSha256 || 'none'}`);
   }
 }
 
@@ -498,9 +641,9 @@ function cmdVerify(repoRoot, strict) {
         continue;
       }
 
-      const currentChecksum = computeChecksum(fullPath);
-      if (artifact.checksum && currentChecksum !== artifact.checksum) {
-        warnings.push(`Checksum mismatch for ${artifact.id}: expected ${artifact.checksum}, got ${currentChecksum}. Run: contextctl touch`);
+      const currentChecksum = computeChecksumSha256(fullPath);
+      if (artifact.checksumSha256 && currentChecksum !== artifact.checksumSha256) {
+        warnings.push(`Checksum mismatch for ${artifact.id}: expected ${artifact.checksumSha256}, got ${currentChecksum}. Run: contextctl touch`);
       }
     }
   }
@@ -550,12 +693,19 @@ function cmdAddEnv(repoRoot, id, description) {
     die(`[error] Environment "${id}" already exists.`);
   }
 
+  const defaultApproval = id === 'prod' ? 'required' : (id === 'dev' ? 'none' : 'optional');
+
   envRegistry.environments.push({
     id,
     description: description || `${id} environment`,
-    permissions: {
-      database: { read: true, write: id !== 'prod', migrate: id !== 'prod' },
-      deploy: id !== 'dev'
+    database: {
+      writable: id !== 'prod',
+      migrations: id === 'prod' ? 'change-request' : (id === 'staging' ? 'review-required' : true),
+      seedData: id === 'dev'
+    },
+    deployment: {
+      allowed: id !== 'dev',
+      approval: defaultApproval
     }
   });
 
@@ -575,10 +725,10 @@ function cmdListEnvs(repoRoot, format) {
 
   for (const env of envRegistry.environments) {
     console.log(`  [${env.id}] ${env.description || ''}`);
-    const perms = env.permissions || {};
-    const dbPerms = perms.database || {};
-    console.log(`    Database: read=${dbPerms.read ?? '-'}, write=${dbPerms.write ?? '-'}, migrate=${dbPerms.migrate ?? '-'}`);
-    console.log(`    Deploy: ${perms.deploy ?? '-'}`);
+    const db = env.database || {};
+    const deploy = env.deployment || {};
+    console.log(`    Database: writable=${db.writable ?? '-'}, migrations=${db.migrations ?? '-'}, seedData=${db.seedData ?? '-'}`);
+    console.log(`    Deployment: allowed=${deploy.allowed ?? '-'}, approval=${deploy.approval ?? '-'}`);
   }
 }
 
@@ -604,10 +754,9 @@ function cmdVerifyConfig(repoRoot, envId) {
       warnings.push(`No config file found for environment "${env.id}".`);
     }
 
-    // Check permissions are defined
-    if (!env.permissions) {
-      warnings.push(`Environment "${env.id}" has no permissions defined.`);
-    }
+    // Check minimal policy keys exist
+    if (!env.database) warnings.push(`Environment "${env.id}" has no database policy defined.`);
+    if (!env.deployment) warnings.push(`Environment "${env.id}" has no deployment policy defined.`);
   }
 
   // Report results
@@ -641,11 +790,14 @@ function main() {
   const format = (opts['format'] || 'text').toLowerCase();
 
   switch (command) {
+    case 'help':
+      usage(0);
+      break;
     case 'init':
       cmdInit(repoRoot, !!opts['dry-run']);
       break;
     case 'add-artifact':
-      cmdAddArtifact(repoRoot, opts['id'], opts['type'], opts['path']);
+      cmdAddArtifact(repoRoot, opts['id'], opts['type'], opts['path'], opts['mode'], opts['format'], opts['tags']);
       break;
     case 'remove-artifact':
       cmdRemoveArtifact(repoRoot, opts['id']);

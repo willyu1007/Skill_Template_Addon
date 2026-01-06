@@ -150,5 +150,5 @@ Delete these paths (if you want a clean uninstall):
 
 Then re-sync wrappers:
 ```bash
-node .ai/scripts/sync-skills.cjs --scope current --providers both
+node .ai/scripts/sync-skills.cjs --scope current --providers both --mode update
 ```

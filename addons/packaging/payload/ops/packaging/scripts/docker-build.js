@@ -8,7 +8,6 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
 
 function parseArgs(args) {
   const result = { flags: {} };
@@ -56,10 +55,10 @@ async function main() {
   const args = process.argv.slice(2);
   const parsed = parseArgs(args);
   
-  const { dockerfile, tag } = parsed.flags;
+  const { dockerfile, tag, context } = parsed.flags;
   
   if (!dockerfile || !tag) {
-    console.error('Usage: docker-build.js --dockerfile <path> --tag <tag>');
+    console.error('Usage: docker-build.js --dockerfile <path> --tag <tag> [--context <path>]');
     return 1;
   }
   
@@ -69,14 +68,13 @@ async function main() {
   }
   
   try {
-    await dockerBuild(dockerfile, tag);
-    console.log(`\nSuccessfully built: ${tag}`);
+    await dockerBuild(dockerfile, tag, context || '.');
+    console.log(`\n[ok] Built: ${tag}`);
     return 0;
   } catch (err) {
-    console.error(`\nBuild failed: ${err.message}`);
+    console.error(`\n[error] Build failed: ${err.message}`);
     return 1;
   }
 }
 
 main().then(code => process.exit(code));
-

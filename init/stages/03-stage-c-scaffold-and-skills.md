@@ -78,9 +78,10 @@ After reviewing the resulting scaffold/configs/skills changes, record approval a
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs approve --stage C --repo-root .
 ```
 
+Note: in an interactive shell, the approve step will ask whether to keep the `addons/` directory; choosing to clean will delete the add-on payloads under `addons/` (installed project files remain).
+
 Optional: remove `init/` bootstrap kit after completion:
 
 ```bash
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs cleanup-init --repo-root . --apply --i-understand
 ```
-

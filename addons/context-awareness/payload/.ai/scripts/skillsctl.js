@@ -11,6 +11,7 @@
  *   disable-pack      Disable a skill pack
  *   list-packs        List available packs
  *   sync              Synchronize provider wrappers
+ *   help              Show help
  */
 
 import fs from 'node:fs';
@@ -27,6 +28,9 @@ Usage:
   node .ai/scripts/skillsctl.js <command> [options]
 
 Commands:
+  help
+    Show this help.
+
   status
     --repo-root <path>          Repo root (default: cwd)
     --format <text|json>        Output format (default: text)
@@ -52,6 +56,8 @@ Commands:
   sync
     --repo-root <path>          Repo root (default: cwd)
     --providers <both|codex|claude>  Provider targets (default: both)
+    --sync-mode <update|reset>  sync-skills mode (default: update)
+    --yes                       Allow destructive sync (required for reset)
     Synchronize provider wrappers.
 
 Examples:
@@ -210,7 +216,7 @@ function uniq(arr) {
 // Sync Helper
 // ============================================================================
 
-function runSync(repoRoot, providers) {
+function runSync(repoRoot, providers, syncMode, yes) {
   return new Promise((resolve, reject) => {
     const scriptPath = path.join(repoRoot, '.ai', 'scripts', 'sync-skills.cjs');
     if (!fs.existsSync(scriptPath)) {
@@ -219,7 +225,14 @@ function runSync(repoRoot, providers) {
       return;
     }
 
-    const args = ['--scope', 'current', '--providers', providers];
+    const mode = (syncMode || 'update').toLowerCase();
+    if (!['update', 'reset'].includes(mode)) {
+      reject(new Error(`Invalid --sync-mode: ${syncMode}`));
+      return;
+    }
+
+    const args = ['--scope', 'current', '--providers', providers, '--mode', mode];
+    if (mode === 'reset' && yes) args.push('--yes');
     console.log(`[info] Running: node ${path.relative(repoRoot, scriptPath)} ${args.join(' ')}`);
 
     const child = spawn('node', [scriptPath, ...args], {
@@ -291,7 +304,7 @@ function cmdStatus(repoRoot, format) {
   }
 }
 
-async function cmdEnablePack(repoRoot, packId, providers, noSync) {
+async function cmdEnablePack(repoRoot, packId, providers, noSync, syncMode, yes) {
   if (!packId) die('[error] Pack name is required');
 
   const packInfo = getPackInfo(repoRoot, packId);
@@ -320,7 +333,7 @@ async function cmdEnablePack(repoRoot, packId, providers, noSync) {
   // Run sync unless --no-sync
   if (!noSync) {
     try {
-      await runSync(repoRoot, providers);
+      await runSync(repoRoot, providers, syncMode, yes);
       state.lastSync = new Date().toISOString();
       saveState(repoRoot, state);
     } catch (err) {
@@ -330,7 +343,7 @@ async function cmdEnablePack(repoRoot, packId, providers, noSync) {
   }
 }
 
-async function cmdDisablePack(repoRoot, packId, providers, noSync) {
+async function cmdDisablePack(repoRoot, packId, providers, noSync, syncMode, yes) {
   if (!packId) die('[error] Pack name is required');
 
   const packInfo = getPackInfo(repoRoot, packId);
@@ -372,7 +385,7 @@ async function cmdDisablePack(repoRoot, packId, providers, noSync) {
   // Run sync unless --no-sync
   if (!noSync) {
     try {
-      await runSync(repoRoot, providers);
+      await runSync(repoRoot, providers, syncMode, yes);
       state.lastSync = new Date().toISOString();
       saveState(repoRoot, state);
     } catch (err) {
@@ -414,11 +427,11 @@ function cmdListPacks(repoRoot, format) {
   }
 }
 
-async function cmdSync(repoRoot, providers) {
+async function cmdSync(repoRoot, providers, syncMode, yes) {
   const state = loadState(repoRoot);
 
   try {
-    await runSync(repoRoot, providers);
+    await runSync(repoRoot, providers, syncMode, yes);
     state.lastSync = new Date().toISOString();
     saveState(repoRoot, state);
     console.log('[ok] Sync completed.');
@@ -438,22 +451,27 @@ async function main() {
   const format = (opts['format'] || 'text').toLowerCase();
   const providers = opts['providers'] || 'both';
   const noSync = !!opts['no-sync'];
+  const syncMode = opts['sync-mode'] || 'update';
+  const yes = !!opts['yes'];
 
   switch (command) {
+    case 'help':
+      usage(0);
+      break;
     case 'status':
       cmdStatus(repoRoot, format);
       break;
     case 'enable-pack':
-      await cmdEnablePack(repoRoot, positionals[0], providers, noSync);
+      await cmdEnablePack(repoRoot, positionals[0], providers, noSync, syncMode, yes);
       break;
     case 'disable-pack':
-      await cmdDisablePack(repoRoot, positionals[0], providers, noSync);
+      await cmdDisablePack(repoRoot, positionals[0], providers, noSync, syncMode, yes);
       break;
     case 'list-packs':
       cmdListPacks(repoRoot, format);
       break;
     case 'sync':
-      await cmdSync(repoRoot, providers);
+      await cmdSync(repoRoot, providers, syncMode, yes);
       break;
     default:
       console.error(`[error] Unknown command: ${command}`);

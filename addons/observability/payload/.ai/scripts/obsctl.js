@@ -10,6 +10,10 @@
  *   verify            Verify observability configuration
  *   add-metric        Add a metric definition
  *   list-metrics      List defined metrics
+ *   add-log-field     Add a structured log field
+ *   list-log-fields   List structured log fields
+ *   generate-instrumentation  Print instrumentation hints (no codegen)
+ *   help              Show help
  */
 
 import fs from 'node:fs';
@@ -25,6 +29,9 @@ Usage:
   node .ai/scripts/obsctl.js <command> [options]
 
 Commands:
+  help
+    Show this help.
+
   init
     --repo-root <path>          Repo root (default: cwd)
     --dry-run                   Show what would be created
@@ -43,6 +50,9 @@ Commands:
     --name <string>             Metric name (required)
     --type <counter|gauge|histogram>  Metric type (required)
     --description <string>      Description (optional)
+    --labels <csv>              Labels (comma-separated, optional)
+    --unit <string>             Unit (optional, e.g. seconds, requests)
+    --buckets <csv>             Histogram buckets (comma-separated numbers, optional)
     --repo-root <path>          Repo root (default: cwd)
     Add a metric definition.
 
@@ -51,9 +61,28 @@ Commands:
     --format <text|json>        Output format (default: text)
     List defined metrics.
 
+  add-log-field
+    --name <string>             Field name (required)
+    --type <string>             Field type (required, e.g. string, number, boolean)
+    --description <string>      Description (optional)
+    --required                  Mark as required (optional)
+    --enum <csv>                Enum values (optional)
+    --repo-root <path>          Repo root (default: cwd)
+    Add a structured log field to docs/context/observability/logs-schema.json.
+
+  list-log-fields
+    --repo-root <path>          Repo root (default: cwd)
+    --format <text|json>        Output format (default: text)
+    List structured log fields.
+
+  generate-instrumentation
+    --lang <typescript|javascript|python|go>  Language (default: typescript)
+    --repo-root <path>          Repo root (default: cwd)
+    Print instrumentation hints based on the contracts (no code generation).
+
 Examples:
   node .ai/scripts/obsctl.js init
-  node .ai/scripts/obsctl.js add-metric --name http_requests_total --type counter
+  node .ai/scripts/obsctl.js add-metric --name http_requests_total --type counter --unit requests --labels method,path,status
   node .ai/scripts/obsctl.js list-metrics
 `;
   console.log(msg.trim());
@@ -122,6 +151,18 @@ function writeFileIfMissing(filePath, content) {
   return { op: 'write', path: filePath };
 }
 
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function parseCsv(v) {
+  if (!v) return [];
+  return String(v)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 // ============================================================================
 // Observability Management
 // ============================================================================
@@ -142,28 +183,98 @@ function getMetricsPath(repoRoot) {
   return path.join(getContextObsDir(repoRoot), 'metrics-registry.json');
 }
 
-function loadConfig(repoRoot) {
-  return readJson(getConfigPath(repoRoot)) || {
+function getLogsSchemaPath(repoRoot) {
+  return path.join(getContextObsDir(repoRoot), 'logs-schema.json');
+}
+
+function getTracesConfigPath(repoRoot) {
+  return path.join(getContextObsDir(repoRoot), 'traces-config.json');
+}
+
+function normalizeConfig(raw) {
+  const cfg = raw && typeof raw === 'object' ? raw : {};
+  return {
     version: 1,
-    initialized: false
+    updatedAt: cfg.updatedAt || cfg.lastUpdated || nowIso(),
+    metrics: cfg.metrics !== undefined ? !!cfg.metrics : true,
+    logs: cfg.logs !== undefined ? !!cfg.logs : true,
+    traces: cfg.traces !== undefined ? !!cfg.traces : true,
+    platform: cfg.platform !== undefined ? cfg.platform : null
   };
+}
+
+function normalizeMetricsRegistry(raw) {
+  const reg = raw && typeof raw === 'object' ? raw : {};
+  const metrics = Array.isArray(reg.metrics) ? reg.metrics : [];
+  const normalizedMetrics = metrics
+    .filter((m) => m && typeof m === 'object')
+    .map((m) => ({
+      name: String(m.name || '').trim(),
+      type: String(m.type || '').trim(),
+      description: m.description ? String(m.description) : '',
+      labels: Array.isArray(m.labels) ? m.labels.map((l) => String(l)) : [],
+      ...(m.unit ? { unit: String(m.unit) } : {}),
+      ...(Array.isArray(m.buckets) ? { buckets: m.buckets } : {})
+    }))
+    .filter((m) => m.name && m.type);
+
+  return {
+    version: 1,
+    updatedAt: reg.updatedAt || reg.lastUpdated || nowIso(),
+    metrics: normalizedMetrics
+  };
+}
+
+function normalizeLogsSchema(raw) {
+  const doc = raw && typeof raw === 'object' ? raw : {};
+  const fields = Array.isArray(doc.fields) ? doc.fields : [];
+  return {
+    version: 1,
+    updatedAt: doc.updatedAt || doc.lastUpdated || nowIso(),
+    format: doc.format || 'json',
+    levels: Array.isArray(doc.levels) ? doc.levels : ['debug', 'info', 'warn', 'error'],
+    fields: fields
+      .filter((f) => f && typeof f === 'object')
+      .map((f) => ({
+        name: String(f.name || '').trim(),
+        type: String(f.type || '').trim(),
+        ...(f.format ? { format: String(f.format) } : {}),
+        ...(f.enum ? { enum: Array.isArray(f.enum) ? f.enum : parseCsv(f.enum) } : {}),
+        required: !!f.required,
+        ...(f.description ? { description: String(f.description) } : {})
+      }))
+      .filter((f) => f.name && f.type)
+  };
+}
+
+function loadConfig(repoRoot) {
+  return normalizeConfig(readJson(getConfigPath(repoRoot)));
 }
 
 function saveConfig(repoRoot, config) {
-  config.lastUpdated = new Date().toISOString();
-  writeJson(getConfigPath(repoRoot), config);
+  const normalized = normalizeConfig(config);
+  normalized.updatedAt = nowIso();
+  writeJson(getConfigPath(repoRoot), normalized);
 }
 
 function loadMetrics(repoRoot) {
-  return readJson(getMetricsPath(repoRoot)) || {
-    version: 1,
-    metrics: []
-  };
+  return normalizeMetricsRegistry(readJson(getMetricsPath(repoRoot)));
 }
 
 function saveMetrics(repoRoot, metrics) {
-  metrics.lastUpdated = new Date().toISOString();
-  writeJson(getMetricsPath(repoRoot), metrics);
+  const normalized = normalizeMetricsRegistry(metrics);
+  normalized.updatedAt = nowIso();
+  writeJson(getMetricsPath(repoRoot), normalized);
+}
+
+function loadLogsSchema(repoRoot) {
+  return normalizeLogsSchema(readJson(getLogsSchemaPath(repoRoot)));
+}
+
+function saveLogsSchema(repoRoot, schema) {
+  const normalized = normalizeLogsSchema(schema);
+  normalized.updatedAt = nowIso();
+  writeJson(getLogsSchemaPath(repoRoot), normalized);
 }
 
 // ============================================================================
@@ -193,14 +304,14 @@ function cmdInit(repoRoot, dryRun) {
   // Create config
   const configPath = getConfigPath(repoRoot);
   if (!fs.existsSync(configPath) && !dryRun) {
-    saveConfig(repoRoot, { version: 1, initialized: true });
+    saveConfig(repoRoot, { version: 1, updatedAt: nowIso(), metrics: true, logs: true, traces: true, platform: null });
     actions.push({ op: 'write', path: configPath });
   }
 
   // Create metrics registry
   const metricsPath = getMetricsPath(repoRoot);
   if (!fs.existsSync(metricsPath) && !dryRun) {
-    saveMetrics(repoRoot, { version: 1, metrics: [] });
+    saveMetrics(repoRoot, { version: 1, updatedAt: nowIso(), metrics: [] });
     actions.push({ op: 'write', path: metricsPath });
   }
 
@@ -237,27 +348,31 @@ node .ai/scripts/obsctl.js verify
   }
 
   // Create logs schema
-  const logsSchemaPath = path.join(contextObsDir, 'logs-schema.json');
+  const logsSchemaPath = getLogsSchemaPath(repoRoot);
   if (!fs.existsSync(logsSchemaPath) && !dryRun) {
-    writeJson(logsSchemaPath, {
+    saveLogsSchema(repoRoot, {
       version: 1,
+      updatedAt: nowIso(),
+      format: 'json',
+      levels: ['debug', 'info', 'warn', 'error'],
       fields: [
-        { name: 'timestamp', type: 'datetime', required: true },
-        { name: 'level', type: 'string', enum: ['debug', 'info', 'warn', 'error'] },
-        { name: 'message', type: 'string', required: true },
-        { name: 'service', type: 'string' },
-        { name: 'trace_id', type: 'string' }
+        { name: 'timestamp', type: 'string', format: 'iso8601', required: true, description: 'Log timestamp in ISO 8601 format' },
+        { name: 'level', type: 'string', enum: ['debug', 'info', 'warn', 'error'], required: true, description: 'Log level' },
+        { name: 'message', type: 'string', required: true, description: 'Log message' },
+        { name: 'service', type: 'string', required: true, description: 'Service name' },
+        { name: 'trace_id', type: 'string', required: false, description: 'Distributed tracing ID' }
       ]
     });
     actions.push({ op: 'write', path: logsSchemaPath });
   }
 
   // Create traces config
-  const tracesConfigPath = path.join(contextObsDir, 'traces-config.json');
+  const tracesConfigPath = getTracesConfigPath(repoRoot);
   if (!fs.existsSync(tracesConfigPath) && !dryRun) {
     writeJson(tracesConfigPath, {
       version: 1,
-      sampling: { default: 0.1, errors: 1.0 },
+      updatedAt: nowIso(),
+      sampling: { default: 0.1, errorRate: 1.0, description: 'Sample 10% of traces, 100% of errors' },
       propagation: ['tracecontext', 'baggage']
     });
     actions.push({ op: 'write', path: tracesConfigPath });
@@ -277,7 +392,7 @@ function cmdStatus(repoRoot, format) {
   const status = {
     initialized: fs.existsSync(getObsDir(repoRoot)),
     metricsCount: metrics.metrics.length,
-    lastUpdated: config.lastUpdated
+    updatedAt: config.updatedAt
   };
 
   if (format === 'json') {
@@ -288,7 +403,7 @@ function cmdStatus(repoRoot, format) {
   console.log('Observability Status:');
   console.log(`  Initialized: ${status.initialized ? 'yes' : 'no'}`);
   console.log(`  Metrics defined: ${status.metricsCount}`);
-  console.log(`  Last updated: ${status.lastUpdated || 'never'}`);
+  console.log(`  Updated at: ${status.updatedAt || 'never'}`);
 }
 
 function cmdVerify(repoRoot) {
@@ -322,7 +437,7 @@ function cmdVerify(repoRoot) {
   process.exit(ok ? 0 : 1);
 }
 
-function cmdAddMetric(repoRoot, name, type, description) {
+function cmdAddMetric(repoRoot, name, type, description, opts) {
   if (!name) die('[error] --name is required');
   if (!type) die('[error] --type is required');
 
@@ -336,15 +451,109 @@ function cmdAddMetric(repoRoot, name, type, description) {
     die(`[error] Metric "${name}" already exists`);
   }
 
+  const options = opts && typeof opts === 'object' ? opts : {};
+  const labels = parseCsv(options.labels);
+  const unit = options.unit ? String(options.unit) : undefined;
+  const buckets = options.buckets
+    ? parseCsv(options.buckets).map((n) => Number(n)).filter((n) => Number.isFinite(n))
+    : undefined;
+
   metrics.metrics.push({
     name,
     type,
     description: description || '',
-    addedAt: new Date().toISOString()
+    ...(labels.length > 0 ? { labels } : {}),
+    ...(unit ? { unit } : {}),
+    ...(type === 'histogram' && buckets && buckets.length > 0 ? { buckets } : {})
   });
   saveMetrics(repoRoot, metrics);
 
   console.log(`[ok] Added metric: ${name} (${type})`);
+}
+
+function cmdAddLogField(repoRoot, name, type, description, required, enumCsv) {
+  if (!name) die('[error] --name is required');
+  if (!type) die('[error] --type is required');
+
+  const schema = loadLogsSchema(repoRoot);
+  if (schema.fields.find((f) => f.name === name)) {
+    die(`[error] Log field "${name}" already exists`);
+  }
+
+  schema.fields.push({
+    name,
+    type,
+    required: !!required,
+    ...(description ? { description: String(description) } : {}),
+    ...(enumCsv ? { enum: parseCsv(enumCsv) } : {})
+  });
+  saveLogsSchema(repoRoot, schema);
+
+  console.log(`[ok] Added log field: ${name} (${type})`);
+}
+
+function cmdListLogFields(repoRoot, format) {
+  const schema = loadLogsSchema(repoRoot);
+  if (format === 'json') {
+    console.log(JSON.stringify(schema, null, 2));
+    return;
+  }
+
+  console.log(`Log Fields (${schema.fields.length}):\n`);
+  if (schema.fields.length === 0) {
+    console.log('  (no fields defined)');
+    return;
+  }
+
+  for (const f of schema.fields) {
+    const req = f.required ? ' required' : '';
+    console.log(`  - ${f.name}: ${f.type}${req}`);
+    if (f.description) console.log(`      ${f.description}`);
+  }
+}
+
+function cmdGenerateInstrumentation(repoRoot, lang) {
+  const language = String(lang || 'typescript').toLowerCase();
+
+  const metrics = loadMetrics(repoRoot);
+  const logs = loadLogsSchema(repoRoot);
+  const traces = readJson(getTracesConfigPath(repoRoot)) || {};
+
+  console.log('Instrumentation Hints');
+  console.log('----------------------------------------');
+  console.log(`Language: ${language}`);
+  console.log(`Metrics: ${metrics.metrics.length}`);
+  console.log(`Log fields: ${logs.fields.length}`);
+  console.log('----------------------------------------\n');
+
+  if (language === 'typescript' || language === 'javascript') {
+    console.log('# Metrics');
+    console.log('# - Use OpenTelemetry Metrics API; follow names/labels/units from metrics-registry.json');
+    console.log('');
+    for (const m of metrics.metrics.slice(0, 10)) {
+      const labels = Array.isArray(m.labels) && m.labels.length > 0 ? ` labels=[${m.labels.join(', ')}]` : '';
+      const unit = m.unit ? ` unit=${m.unit}` : '';
+      console.log(`- ${m.name} (${m.type})${unit}${labels}`);
+    }
+    if (metrics.metrics.length > 10) console.log(`- ... (${metrics.metrics.length - 10} more)`);
+
+    console.log('\n# Logs');
+    console.log('# - Emit structured JSON logs with at least required fields from logs-schema.json');
+
+    console.log('\n# Traces');
+    if (traces.spanNaming?.examples) {
+      console.log('# - Span naming examples:');
+      for (const ex of traces.spanNaming.examples) console.log(`- ${ex}`);
+    } else {
+      console.log('# - Follow docs/context/observability/traces-config.json conventions.');
+    }
+    return;
+  }
+
+  console.log('# See the contract files for details:');
+  console.log(`- ${path.relative(repoRoot, getMetricsPath(repoRoot))}`);
+  console.log(`- ${path.relative(repoRoot, getLogsSchemaPath(repoRoot))}`);
+  console.log(`- ${path.relative(repoRoot, getTracesConfigPath(repoRoot))}`);
 }
 
 function cmdListMetrics(repoRoot, format) {
@@ -379,6 +588,9 @@ function main() {
   const format = (opts['format'] || 'text').toLowerCase();
 
   switch (command) {
+    case 'help':
+      usage(0);
+      break;
     case 'init':
       cmdInit(repoRoot, !!opts['dry-run']);
       break;
@@ -389,10 +601,19 @@ function main() {
       cmdVerify(repoRoot);
       break;
     case 'add-metric':
-      cmdAddMetric(repoRoot, opts['name'], opts['type'], opts['description']);
+      cmdAddMetric(repoRoot, opts['name'], opts['type'], opts['description'], opts);
       break;
     case 'list-metrics':
       cmdListMetrics(repoRoot, format);
+      break;
+    case 'add-log-field':
+      cmdAddLogField(repoRoot, opts['name'], opts['type'], opts['description'], !!opts['required'], opts['enum']);
+      break;
+    case 'list-log-fields':
+      cmdListLogFields(repoRoot, format);
+      break;
+    case 'generate-instrumentation':
+      cmdGenerateInstrumentation(repoRoot, opts['lang'] || opts['language']);
       break;
     default:
       console.error(`[error] Unknown command: ${command}`);

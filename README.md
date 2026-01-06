@@ -39,7 +39,7 @@ dev-docs/                     # Complex task documentation
 - After changing `.ai/skills/`, regenerate wrappers:
 
 ```bash
-node .ai/scripts/sync-skills.cjs --scope current --providers both
+node .ai/scripts/sync-skills.cjs --scope current --providers both --mode reset --yes
 ```
 
 ## Pointers

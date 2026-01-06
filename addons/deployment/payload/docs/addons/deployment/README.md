@@ -73,7 +73,7 @@ Humans execute and approve all deployments.
 node .ai/scripts/deployctl.js init --model k8s
 
 # Add service
-node .ai/scripts/deployctl.js add-service --id api
+node .ai/scripts/deployctl.js add-service --id api --artifact api:v1.0.0
 
 # Plan deployment
 node .ai/scripts/deployctl.js plan --service api --env staging
@@ -81,4 +81,3 @@ node .ai/scripts/deployctl.js plan --service api --env staging
 # Check status
 node .ai/scripts/deployctl.js status --env staging
 ```
-

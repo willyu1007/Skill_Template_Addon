@@ -99,8 +99,8 @@ Examples:
 
   // Run plan (actual deployment would require human execution)
   const planArgs = ['plan', '--service', service, '--env', parsed.flags.env];
+  if (parsed.flags.tag) planArgs.push('--tag', parsed.flags.tag);
   return runDeployctl(planArgs);
 }
 
 main().then(code => process.exit(code));
-

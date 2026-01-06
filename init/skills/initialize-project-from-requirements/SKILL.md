@@ -158,6 +158,8 @@ After the user reviews the changes and explicitly approves, run:
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs approve --stage C --repo-root .
 ```
 
+Note: when approving Stage C in an interactive shell, the pipeline will ask whether to keep the `addons/` directory; choosing to clean will delete the add-on payloads under `addons/` (installed project files remain).
+
 ### 4) Post-init: ask to update root AGENTS.md (recommended)
 
 After Stage C approval, explicitly ask:

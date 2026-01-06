@@ -53,6 +53,7 @@ Commands:
     --repo-root <path>          Repo root (default: cwd)
     --stage <A|B|C>             Stage to approve (default: current state.stage)
     --note <text>               Optional audit note
+    --addons-root <path>        Add-ons directory (default: addons) (Stage C only)
     Record explicit user approval and advance state to the next stage.
 
   validate
@@ -185,6 +186,87 @@ function writeJson(filePath, data) {
 
 function uniq(arr) {
   return Array.from(new Set(arr));
+}
+
+function isInteractiveTty() {
+  return !!(process.stdin && process.stdin.isTTY && process.stdout && process.stdout.isTTY);
+}
+
+function readLineSync(prompt) {
+  process.stdout.write(prompt);
+  const buf = Buffer.alloc(1);
+  let line = '';
+  while (true) {
+    let bytes = 0;
+    try {
+      bytes = fs.readSync(0, buf, 0, 1, null);
+    } catch {
+      break;
+    }
+    if (bytes === 0) break;
+    const ch = buf.toString('utf8', 0, bytes);
+    if (ch === '\n') break;
+    if (ch === '\r') continue;
+    line += ch;
+  }
+  return line.trim();
+}
+
+function promptYesNoSync(question, defaultYes) {
+  const suffix = defaultYes ? ' [Y/n] ' : ' [y/N] ';
+  for (let i = 0; i < 3; i += 1) {
+    const ans = readLineSync(`${question}${suffix}`).toLowerCase();
+    if (!ans) return defaultYes;
+    if (ans === 'y' || ans === 'yes') return true;
+    if (ans === 'n' || ans === 'no') return false;
+    console.log('[info] Please answer: y/yes or n/no.');
+  }
+  return defaultYes;
+}
+
+function ensurePathWithinRepo(repoRoot, targetPath, label) {
+  const rr = path.resolve(repoRoot);
+  const tp = path.resolve(targetPath);
+  if (tp === rr || !tp.startsWith(rr + path.sep)) {
+    die(`[error] Refusing to operate outside repo root for ${label}: ${tp}`);
+  }
+}
+
+function removeDirRecursive(dirPath) {
+  try {
+    fs.rmSync(dirPath, { recursive: true, force: true });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+function maybePromptRemoveAddonsDir(repoRoot, addonsRoot) {
+  const candidate = path.isAbsolute(addonsRoot) ? addonsRoot : path.join(repoRoot, addonsRoot);
+  const addonsDir = path.resolve(candidate);
+  ensurePathWithinRepo(repoRoot, addonsDir, 'addons-root');
+
+  if (!fs.existsSync(addonsDir)) {
+    return { mode: 'skip', reason: 'not-found', path: addonsDir };
+  }
+  if (!isInteractiveTty()) {
+    return { mode: 'skip', reason: 'non-interactive', path: addonsDir };
+  }
+
+  console.log('\n== Optional Cleanup: Add-ons Payloads ==\n');
+  console.log(`Add-ons payload directory: ${path.relative(repoRoot, addonsDir)}`);
+  console.log('- These are template payloads used to install optional add-ons later.');
+  console.log('- Installed project files (e.g. docs/context/, .ai/scripts/*) will remain.\n');
+
+  const keep = promptYesNoSync('Keep the add-ons payload directory?', true);
+  if (keep) return { mode: 'kept', path: addonsDir };
+
+  const confirm = promptYesNoSync(`Remove ${path.relative(repoRoot, addonsDir)} now?`, false);
+  if (!confirm) return { mode: 'kept', reason: 'canceled', path: addonsDir };
+
+  const res = removeDirRecursive(addonsDir);
+  if (!res.ok) return { mode: 'failed', path: addonsDir, error: res.error };
+  return { mode: 'removed', path: addonsDir };
 }
 
 // ============================================================================
@@ -1407,7 +1489,7 @@ function syncWrappers(repoRoot, providers, apply) {
   }
   const providersArg = providers || 'both';
   const cmd = 'node';
-  const args = [scriptPath, '--scope', 'current', '--providers', providersArg];
+  const args = [scriptPath, '--scope', 'current', '--providers', providersArg, '--mode', 'reset', '--yes'];
 
   if (!apply) return { op: 'run', cmd: `${cmd} ${args.join(' ')}`, mode: 'dry-run' };
 
@@ -1702,8 +1784,30 @@ function main() {
 	      addHistoryEvent(state, 'init_completed', note || 'Initialization completed');
 	      saveState(repoRoot, state);
 	      printStatus(state, repoRoot);
-      process.exit(0);
-    }
+
+        // Optional prompt: remove addons/ payload directory after init completion (interactive only).
+        const addonsRoot = opts['addons-root'] || 'addons';
+        const addonsDecision = maybePromptRemoveAddonsDir(repoRoot, addonsRoot);
+        if (addonsDecision.mode === 'removed') {
+          addHistoryEvent(
+            state,
+            'addons_dir_removed',
+            `Removed add-ons payload directory: ${path.relative(repoRoot, addonsDecision.path)}`
+          );
+          saveState(repoRoot, state);
+          console.log(`[ok] Removed ${path.relative(repoRoot, addonsDecision.path)}`);
+        } else if (addonsDecision.mode === 'failed') {
+          addHistoryEvent(
+            state,
+            'addons_dir_remove_failed',
+            `Failed to remove add-ons payload directory: ${path.relative(repoRoot, addonsDecision.path)} (${addonsDecision.error})`
+          );
+          saveState(repoRoot, state);
+          console.warn(`[warn] Failed to remove ${path.relative(repoRoot, addonsDecision.path)}: ${addonsDecision.error}`);
+        }
+
+        process.exit(0);
+      }
 
     console.log('[info] Already complete; no need to approve again');
     process.exit(0);

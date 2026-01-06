@@ -63,6 +63,7 @@ Usage:
 Options:
   --service <id>  Service to rollback (required)
   --env <env>     Target environment (required)
+  --repo-root <path>  Repo root (default: auto-detect)
   --help          Show this help
 
 This script provides rollback guidance and commands.
@@ -82,23 +83,30 @@ Actual rollback execution requires human intervention.
   const config = loadConfig(repoRoot);
   if (!config) {
     console.error('Error: Deployment config not found.');
+    console.error('Run: node .ai/scripts/deployctl.js init');
     return 1;
   }
 
-  const svc = config.services.find(s => s.id === service);
+  const services = Array.isArray(config.services) ? config.services : [];
+  const svc = services.find(s => s.id === service);
   if (!svc) {
     console.error(`Error: Service "${service}" not found.`);
+    if (services.length > 0) {
+      console.error(`Known services: ${services.map(s => s.id).join(', ')}`);
+    } else {
+      console.error('No services are registered yet. Run: node .ai/scripts/deployctl.js add-service --id <id> --artifact <ref>');
+    }
     return 1;
   }
 
-  console.log(`\n🔄 Rollback Plan`);
-  console.log(`${'─'.repeat(40)}`);
+  console.log(`\nRollback Plan`);
+  console.log(`${'-'.repeat(40)}`);
   console.log(`Service:     ${service}`);
   console.log(`Environment: ${env}`);
   console.log(`Model:       ${config.model}`);
-  console.log(`${'─'.repeat(40)}`);
+  console.log(`${'-'.repeat(40)}`);
 
-  console.log(`\n⚠️  Rollback requires human execution.`);
+  console.log(`\n[warn] Rollback requires human execution.`);
   console.log(`\nRollback commands:`);
 
   if (config.model === 'k8s') {
@@ -119,9 +127,8 @@ kubectl rollout history deployment/${service} -n ${env}
 `);
   }
 
-  console.log(`\n📖 See: ops/deploy/workdocs/runbooks/rollback-procedure.md`);
+  console.log(`\nSee: ops/deploy/workdocs/runbooks/rollback-procedure.md`);
   return 0;
 }
 
 process.exit(main());
-

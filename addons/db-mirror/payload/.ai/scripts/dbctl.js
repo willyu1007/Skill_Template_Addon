@@ -13,11 +13,12 @@
  *   verify            Verify schema mirror consistency
  *   generate-migration  Generate a new migration file
  *   sync-to-context   Sync schema to docs/context/ (if context-awareness enabled)
+ *   help              Show help
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 
 // ============================================================================
 // CLI Argument Parsing
@@ -29,6 +30,9 @@ Usage:
   node .ai/scripts/dbctl.js <command> [options]
 
 Commands:
+  help
+    Show this help.
+
   init
     --repo-root <path>          Repo root (default: cwd)
     --dry-run                   Show what would be created without writing
@@ -162,33 +166,48 @@ function getMigrationsDir(repoRoot) {
   return path.join(getDbDir(repoRoot), 'migrations');
 }
 
+function normalizeSchema(raw) {
+  const now = new Date().toISOString();
+  const schema = raw && typeof raw === 'object' ? raw : {};
+  return {
+    version: 1,
+    updatedAt: schema.updatedAt || schema.lastUpdated || now,
+    tables: Array.isArray(schema.tables) ? schema.tables : []
+  };
+}
+
+function normalizeEnvConfig(raw) {
+  const now = new Date().toISOString();
+  const cfg = raw && typeof raw === 'object' ? raw : {};
+  return {
+    version: 1,
+    updatedAt: cfg.updatedAt || cfg.lastUpdated || now,
+    environments: Array.isArray(cfg.environments) ? cfg.environments : []
+  };
+}
+
 function loadSchema(repoRoot) {
   const schemaPath = getSchemaPath(repoRoot);
   const data = readJson(schemaPath);
-  if (!data) {
-    return {
-      version: 1,
-      lastUpdated: new Date().toISOString(),
-      tables: []
-    };
-  }
-  return data;
+  return normalizeSchema(data);
 }
 
 function saveSchema(repoRoot, schema) {
-  schema.lastUpdated = new Date().toISOString();
-  writeJson(getSchemaPath(repoRoot), schema);
+  const normalized = normalizeSchema(schema);
+  normalized.updatedAt = new Date().toISOString();
+  writeJson(getSchemaPath(repoRoot), normalized);
 }
 
 function loadEnvConfig(repoRoot) {
   const configPath = getEnvConfigPath(repoRoot);
   const data = readJson(configPath);
-  if (!data) {
-    return {
-      environments: []
-    };
-  }
-  return data;
+  return normalizeEnvConfig(data);
+}
+
+function saveEnvConfig(repoRoot, cfg) {
+  const normalized = normalizeEnvConfig(cfg);
+  normalized.updatedAt = new Date().toISOString();
+  writeJson(getEnvConfigPath(repoRoot), normalized);
 }
 
 function parseColumnDef(colDef) {
@@ -287,7 +306,7 @@ Humans execute migrations and handle credentials.
   if (!fs.existsSync(schemaPath) && !dryRun) {
     const schema = {
       version: 1,
-      lastUpdated: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       tables: []
     };
     writeJson(schemaPath, schema);
@@ -302,6 +321,8 @@ Humans execute migrations and handle credentials.
   const envConfigPath = getEnvConfigPath(repoRoot);
   if (!fs.existsSync(envConfigPath) && !dryRun) {
     const envConfig = {
+      version: 1,
+      updatedAt: new Date().toISOString(),
       environments: [
         {
           id: 'dev',
@@ -318,8 +339,8 @@ Humans execute migrations and handle credentials.
           description: 'Staging environment',
           connectionTemplate: 'postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}',
           permissions: {
-            migrations: true,
-            seedData: true,
+            migrations: 'review-required',
+            seedData: false,
             directQueries: false
           }
         },
@@ -328,14 +349,14 @@ Humans execute migrations and handle credentials.
           description: 'Production environment',
           connectionTemplate: 'postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}',
           permissions: {
-            migrations: true,
+            migrations: 'change-request',
             seedData: false,
             directQueries: false
           }
         }
       ]
     };
-    writeJson(envConfigPath, envConfig);
+    saveEnvConfig(repoRoot, envConfig);
     actions.push({ op: 'write', path: envConfigPath });
   } else if (dryRun) {
     actions.push({ op: 'write', path: envConfigPath, mode: 'dry-run' });
@@ -428,7 +449,7 @@ function cmdListTables(repoRoot, format) {
   }
 
   console.log(`Database Schema (${schema.tables.length} tables):`);
-  console.log(`Last updated: ${schema.lastUpdated || 'unknown'}\n`);
+  console.log(`Updated at: ${schema.updatedAt || 'unknown'}\n`);
 
   if (schema.tables.length === 0) {
     console.log('  (no tables defined)');
@@ -562,15 +583,36 @@ function cmdSyncToContext(repoRoot) {
   // Ensure context db directory exists
   ensureDir(contextDir);
 
-  // Write schema to context
+  // Preserve existing database metadata if present.
+  const existing = readJson(contextDbPath) || {};
+  const database = (existing.database && typeof existing.database === 'object')
+    ? existing.database
+    : { kind: 'relational', dialect: 'generic', name: '' };
+
+  // Write normalized context schema (contract-friendly)
   writeJson(contextDbPath, {
-    source: 'db-mirror',
-    syncedAt: new Date().toISOString(),
-    schema: schema
+    version: 1,
+    database,
+    tables: schema.tables,
+    notes: `Synced from db/schema/tables.json by dbctl sync-to-context at ${new Date().toISOString()}`
   });
 
   console.log(`[ok] Synced schema to ${path.relative(repoRoot, contextDbPath)}`);
-  console.log('     Run: node .ai/scripts/contextctl.js touch  (to update registry checksums)');
+
+  // Best-effort: update registry checksums if contextctl is available.
+  const contextctlPath = path.join(repoRoot, '.ai', 'scripts', 'contextctl.js');
+  if (fs.existsSync(contextctlPath)) {
+    try {
+      const res = spawnSync('node', [contextctlPath, 'touch', '--repo-root', repoRoot], { stdio: 'inherit' });
+      if (res.status !== 0) {
+        console.log('     [warn] contextctl touch failed; run it manually to refresh registry checksums.');
+      }
+    } catch {
+      console.log('     [warn] Could not run contextctl touch; run it manually to refresh registry checksums.');
+    }
+  } else {
+    console.log('     Run: node .ai/scripts/contextctl.js touch  (to update registry checksums)');
+  }
 }
 
 // ============================================================================
@@ -583,6 +625,9 @@ function main() {
   const format = (opts['format'] || 'text').toLowerCase();
 
   switch (command) {
+    case 'help':
+      usage(0);
+      break;
     case 'init':
       cmdInit(repoRoot, !!opts['dry-run']);
       break;

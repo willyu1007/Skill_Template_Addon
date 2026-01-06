@@ -11,6 +11,7 @@
  *   set-context-mode  Set context mode (contract|snapshot)
  *   status            Show project status
  *   verify            Verify project state consistency
+ *   help              Show help
  */
 
 import fs from 'node:fs';
@@ -26,6 +27,9 @@ Usage:
   node .ai/scripts/projectctl.js <command> [options]
 
 Commands:
+  help
+    Show this help.
+
   init
     --repo-root <path>          Repo root (default: cwd)
     --dry-run                   Show what would be created without writing
@@ -57,7 +61,7 @@ Examples:
   node .ai/scripts/projectctl.js set-context-mode contract
   node .ai/scripts/projectctl.js status
   node .ai/scripts/projectctl.js get context.mode
-  node .ai/scripts/projectctl.js set project.version 1.0.0
+  node .ai/scripts/projectctl.js set custom.project.version 1.0.0
 `;
   console.log(msg.trim());
   process.exit(exitCode);
@@ -117,6 +121,47 @@ function writeJson(filePath, data) {
 // Project State Management
 // ============================================================================
 
+function normalizeState(raw) {
+  const now = new Date().toISOString();
+  const state = raw && typeof raw === 'object' ? raw : {};
+
+  const createdAt = state.createdAt || now;
+  const updatedAt = state.updatedAt || state.lastUpdated || now;
+
+  const mode = String(state.context?.mode || 'contract').toLowerCase() === 'snapshot'
+    ? 'snapshot'
+    : 'contract';
+  const enabled = state.context?.enabled !== undefined ? !!state.context.enabled : true;
+
+  const features = (state.features && typeof state.features === 'object' && !Array.isArray(state.features))
+    ? state.features
+    : {};
+  const custom = (state.custom && typeof state.custom === 'object' && !Array.isArray(state.custom))
+    ? { ...state.custom }
+    : {};
+
+  // Preserve unknown/legacy top-level keys under custom to keep the root schema valid.
+  const allowedTopKeys = new Set(['version', 'createdAt', 'updatedAt', 'lastUpdated', 'context', 'features', 'custom']);
+  for (const [k, v] of Object.entries(state)) {
+    if (allowedTopKeys.has(k)) continue;
+    if (custom[k] === undefined) custom[k] = v;
+  }
+
+  const legacyContextInitialized = state.context?.initialized;
+  if (legacyContextInitialized !== undefined && custom.contextInitialized === undefined) {
+    custom.contextInitialized = legacyContextInitialized;
+  }
+
+  return {
+    version: 1,
+    createdAt,
+    updatedAt,
+    context: { mode, enabled },
+    features,
+    custom
+  };
+}
+
 function getProjectDir(repoRoot) {
   return path.join(repoRoot, '.ai', 'project');
 }
@@ -128,34 +173,17 @@ function getStatePath(repoRoot) {
 function loadState(repoRoot) {
   const statePath = getStatePath(repoRoot);
   const data = readJson(statePath);
-  if (!data) {
-    return createDefaultState();
-  }
-  return data;
+  return normalizeState(data);
 }
 
 function saveState(repoRoot, state) {
-  state.lastUpdated = new Date().toISOString();
-  writeJson(getStatePath(repoRoot), state);
+  const normalized = normalizeState(state);
+  normalized.updatedAt = new Date().toISOString();
+  writeJson(getStatePath(repoRoot), normalized);
 }
 
 function createDefaultState() {
-  return {
-    version: 1,
-    createdAt: new Date().toISOString(),
-    lastUpdated: new Date().toISOString(),
-    context: {
-      mode: 'contract',
-      initialized: false
-    },
-    project: {
-      name: null,
-      version: null
-    },
-    addons: {
-      contextAwareness: true
-    }
-  };
+  return normalizeState(null);
 }
 
 function getNestedValue(obj, keyPath) {
@@ -179,6 +207,15 @@ function setNestedValue(obj, keyPath, value) {
     current = current[key];
   }
   current[keys[keys.length - 1]] = value;
+}
+
+function isAllowedSetKey(keyPath) {
+  if (!keyPath) return false;
+  if (keyPath === 'context.mode') return true;
+  if (keyPath === 'context.enabled') return true;
+  if (keyPath.startsWith('features.')) return true;
+  if (keyPath.startsWith('custom.')) return true;
+  return false;
 }
 
 // ============================================================================
@@ -208,50 +245,48 @@ function cmdInit(repoRoot, dryRun) {
       actions.push({ op: 'write', path: statePath, mode: 'dry-run' });
     } else {
       const state = createDefaultState();
-      state.context.initialized = true;
       saveState(repoRoot, state);
       actions.push({ op: 'write', path: statePath });
     }
   } else {
-    // Update initialized flag if needed
+    // Normalize existing state to current schema (idempotent)
     if (!dryRun) {
-      const state = loadState(repoRoot);
-      if (!state.context.initialized) {
-        state.context.initialized = true;
-        saveState(repoRoot, state);
-        actions.push({ op: 'update', path: statePath, note: 'set initialized=true' });
-      } else {
-        actions.push({ op: 'skip', path: statePath, reason: 'already initialized' });
-      }
+      const before = readJson(statePath);
+      const after = normalizeState(before);
+      after.updatedAt = new Date().toISOString();
+      writeJson(statePath, after);
+      actions.push({ op: 'update', path: statePath, note: 'normalized to schema' });
     }
   }
 
   // Create schema file
   const schema = {
-    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Project State",
     "type": "object",
-    "required": ["version", "context"],
+    "additionalProperties": false,
+    "required": ["version", "createdAt", "updatedAt", "context"],
     "properties": {
-      "version": { "type": "integer", "minimum": 1 },
-      "createdAt": { "type": "string", "format": "date-time" },
-      "lastUpdated": { "type": "string", "format": "date-time" },
+      "version": { "type": "integer", "const": 1 },
+      "createdAt": { "type": "string", "description": "ISO 8601 timestamp" },
+      "updatedAt": { "type": "string", "description": "ISO 8601 timestamp" },
       "context": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
           "mode": { "type": "string", "enum": ["contract", "snapshot"] },
-          "initialized": { "type": "boolean" }
+          "enabled": { "type": "boolean" }
         }
       },
-      "project": {
+      "features": {
         "type": "object",
-        "properties": {
-          "name": { "type": ["string", "null"] },
-          "version": { "type": ["string", "null"] }
-        }
-      },
-      "addons": {
-        "type": "object",
+        "description": "Feature flags or enabled capabilities",
         "additionalProperties": { "type": "boolean" }
+      },
+      "custom": {
+        "type": "object",
+        "description": "Custom project-specific state",
+        "additionalProperties": true
       }
     }
   };
@@ -294,6 +329,9 @@ function cmdGet(repoRoot, key) {
 function cmdSet(repoRoot, key, value) {
   if (!key) die('[error] Key is required');
   if (value === undefined) die('[error] Value is required');
+  if (!isAllowedSetKey(key)) {
+    die('[error] Unsupported key path. Allowed: context.mode, context.enabled, features.<flag>, custom.<path>');
+  }
 
   const state = loadState(repoRoot);
 
@@ -345,18 +383,12 @@ function cmdStatus(repoRoot, format) {
   console.log('');
   console.log('  Context:');
   console.log(`    Mode: ${state.context?.mode || 'not set'}`);
-  console.log(`    Initialized: ${state.context?.initialized ? 'yes' : 'no'}`);
+  console.log(`    Enabled: ${state.context?.enabled ? 'yes' : 'no'}`);
   console.log('');
-  console.log('  Project:');
-  console.log(`    Name: ${state.project?.name || '(not set)'}`);
-  console.log(`    Version: ${state.project?.version || '(not set)'}`);
+  const featureKeys = Object.entries(state.features || {}).filter(([, v]) => !!v).map(([k]) => k);
+  console.log(`  Features enabled: ${featureKeys.length > 0 ? featureKeys.join(', ') : '(none)'}`);
   console.log('');
-  console.log('  Addons:');
-  const addons = state.addons || {};
-  const enabledAddons = Object.entries(addons).filter(([, v]) => v).map(([k]) => k);
-  console.log(`    Enabled: ${enabledAddons.length > 0 ? enabledAddons.join(', ') : '(none)'}`);
-  console.log('');
-  console.log(`  Last updated: ${state.lastUpdated || 'unknown'}`);
+  console.log(`  Updated at: ${state.updatedAt || 'unknown'}`);
 }
 
 function cmdVerify(repoRoot) {
@@ -382,9 +414,7 @@ function cmdVerify(repoRoot) {
       if (!state.context.mode) {
         warnings.push('state.context.mode is not set');
       }
-      if (!state.context.initialized) {
-        warnings.push('state.context.initialized is false');
-      }
+      if (state.context.enabled !== true) warnings.push('state.context.enabled is false');
     }
   }
 
@@ -418,6 +448,9 @@ function main() {
   const format = (opts['format'] || 'text').toLowerCase();
 
   switch (command) {
+    case 'help':
+      usage(0);
+      break;
     case 'init':
       cmdInit(repoRoot, !!opts['dry-run']);
       break;

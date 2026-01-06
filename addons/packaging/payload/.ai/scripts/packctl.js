@@ -8,13 +8,20 @@
  *   init              Initialize packaging configuration (idempotent)
  *   list              List packaging targets
  *   add               Add a packaging target
+ *   add-service       Add a service target (alias)
+ *   add-job           Add a job target (alias)
+ *   add-app           Add an app target (alias)
  *   remove            Remove a packaging target
+ *   build             Build a target (human-executed)
+ *   build-all         Build all targets (human-executed)
  *   verify            Verify packaging configuration
  *   status            Show packaging status
+ *   help              Show help
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 // ============================================================================
 // CLI Argument Parsing
@@ -26,6 +33,9 @@ Usage:
   node .ai/scripts/packctl.js <command> [options]
 
 Commands:
+  help
+    Show this help.
+
   init
     --repo-root <path>          Repo root (default: cwd)
     --dry-run                   Show what would be created
@@ -37,15 +47,51 @@ Commands:
     List packaging targets.
 
   add
-    --name <string>             Target name (required)
+    --id <string>               Target id (required)
+    --name <string>             Alias for --id
     --type <service|job|app>    Target type (required)
+    --module <path>             Source module path (recommended)
+    --dockerfile <path>         Dockerfile path (default: ops/packaging/<type>s/<id>.Dockerfile)
+    --template <node|python|go|path>  Optional Dockerfile template to seed the dockerfile
+    --context <path>            Build context path (default: --module or ".")
+    --image <string>            Image repository (default: <id>)
     --repo-root <path>          Repo root (default: cwd)
     Add a packaging target.
 
+  add-service
+    --id <string>               Target id (required)
+    --module <path>             Source module path (recommended)
+    --repo-root <path>          Repo root (default: cwd)
+    Convenience alias for: add --type service
+
+  add-job
+    --id <string>               Target id (required)
+    --module <path>             Source module path (recommended)
+    --repo-root <path>          Repo root (default: cwd)
+    Convenience alias for: add --type job
+
+  add-app
+    --id <string>               Target id (required)
+    --module <path>             Source module path (recommended)
+    --repo-root <path>          Repo root (default: cwd)
+    Convenience alias for: add --type app
+
   remove
-    --name <string>             Target name (required)
+    --id <string>               Target id (required)
+    --name <string>             Alias for --id
     --repo-root <path>          Repo root (default: cwd)
     Remove a packaging target.
+
+  build
+    --target <id>               Target id (required)
+    --tag <tag>                 Image tag (default: latest)
+    --repo-root <path>          Repo root (default: cwd)
+    Build a target via docker (human-executed).
+
+  build-all
+    --tag <tag>                 Image tag (default: latest)
+    --repo-root <path>          Repo root (default: cwd)
+    Build all targets via docker (human-executed).
 
   verify
     --repo-root <path>          Repo root (default: cwd)
@@ -58,8 +104,9 @@ Commands:
 
 Examples:
   node .ai/scripts/packctl.js init
-  node .ai/scripts/packctl.js add --name api-server --type service
+  node .ai/scripts/packctl.js add-service --id api --module apps/backend
   node .ai/scripts/packctl.js list
+  node .ai/scripts/packctl.js build --target api --tag v1.0.0
 `;
   console.log(msg.trim());
   process.exit(exitCode);
@@ -118,6 +165,15 @@ function ensureDir(dirPath) {
   return { op: 'skip', path: dirPath, reason: 'exists' };
 }
 
+function writeFileIfMissing(filePath, content) {
+  if (fs.existsSync(filePath)) {
+    return { op: 'skip', path: filePath, reason: 'exists' };
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, 'utf8');
+  return { op: 'write', path: filePath };
+}
+
 // ============================================================================
 // Packaging Management
 // ============================================================================
@@ -130,16 +186,104 @@ function getRegistryPath(repoRoot) {
   return path.join(repoRoot, 'docs', 'packaging', 'registry.json');
 }
 
-function loadRegistry(repoRoot) {
-  return readJson(getRegistryPath(repoRoot)) || {
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function normalizeRegistry(raw) {
+  const now = nowIso();
+  const reg = raw && typeof raw === 'object' ? raw : {};
+  const targets = Array.isArray(reg.targets) ? reg.targets : [];
+
+  const normalizedTargets = targets
+    .filter((t) => t && typeof t === 'object')
+    .map((t) => {
+      const id = String(t.id || t.name || '').trim();
+      const type = String(t.type || '').trim();
+      if (!id || !type) return null;
+      return {
+        id,
+        type,
+        ...(t.module ? { module: String(t.module) } : {}),
+        ...(t.dockerfile ? { dockerfile: String(t.dockerfile) } : {}),
+        ...(t.context ? { context: String(t.context) } : {}),
+        ...(t.image ? { image: String(t.image) } : {}),
+        ...(t.addedAt ? { addedAt: String(t.addedAt) } : {})
+      };
+    })
+    .filter(Boolean);
+
+  return {
     version: 1,
-    targets: []
+    updatedAt: reg.updatedAt || reg.lastUpdated || now,
+    targets: normalizedTargets
   };
 }
 
+function loadRegistry(repoRoot) {
+  return normalizeRegistry(readJson(getRegistryPath(repoRoot)));
+}
+
 function saveRegistry(repoRoot, registry) {
-  registry.lastUpdated = new Date().toISOString();
-  writeJson(getRegistryPath(repoRoot), registry);
+  const normalized = normalizeRegistry(registry);
+  normalized.updatedAt = nowIso();
+  writeJson(getRegistryPath(repoRoot), normalized);
+}
+
+function getDefaultDockerfilePath(type, id) {
+  return `ops/packaging/${type}s/${id}.Dockerfile`;
+}
+
+function getTemplatePath(repoRoot, template) {
+  if (!template) return null;
+  const t = String(template).trim();
+  if (!t) return null;
+  if (t === 'node') return path.join(repoRoot, 'ops', 'packaging', 'templates', 'Dockerfile.node');
+  if (t === 'python') return path.join(repoRoot, 'ops', 'packaging', 'templates', 'Dockerfile.python');
+  if (t === 'go') return path.join(repoRoot, 'ops', 'packaging', 'templates', 'Dockerfile.go');
+  return path.isAbsolute(t) ? t : path.join(repoRoot, t);
+}
+
+function ensureDockerfile(repoRoot, dockerfileRel, template) {
+  const dockerfileAbs = path.join(repoRoot, dockerfileRel);
+  if (fs.existsSync(dockerfileAbs)) return { op: 'skip', path: dockerfileAbs, reason: 'exists' };
+
+  const templatePath = getTemplatePath(repoRoot, template);
+  if (templatePath && fs.existsSync(templatePath)) {
+    const content = fs.readFileSync(templatePath, 'utf8');
+    return writeFileIfMissing(dockerfileAbs, content);
+  }
+
+  const fallback = `# Dockerfile (generated placeholder)\n# Generated: ${nowIso()}\n# Tip: copy and customize a template from ops/packaging/templates/\n\nFROM scratch\n`;
+  return writeFileIfMissing(dockerfileAbs, fallback);
+}
+
+function runDockerBuild(repoRoot, dockerfileRel, tag, contextRel) {
+  const scriptPath = path.join(repoRoot, 'ops', 'packaging', 'scripts', 'docker-build.js');
+  if (!fs.existsSync(scriptPath)) {
+    die('[error] ops/packaging/scripts/docker-build.js not found. Run: packctl init');
+  }
+
+  const args = ['--dockerfile', dockerfileRel, '--tag', tag];
+  if (contextRel) args.push('--context', contextRel);
+
+  console.log(`[info] Running: node ${path.relative(repoRoot, scriptPath)} ${args.join(' ')}`);
+  const res = spawnSync('node', [scriptPath, ...args], { cwd: repoRoot, stdio: 'inherit' });
+  if (res.status !== 0) {
+    die(`[error] docker-build failed with code ${res.status}`);
+  }
+}
+
+function applyDockerTag(imageRef, tag) {
+  const ref = String(imageRef || '').trim();
+  const t = String(tag || 'latest').trim() || 'latest';
+  if (!ref) return '';
+
+  const lastSlash = ref.lastIndexOf('/');
+  const lastColon = ref.lastIndexOf(':');
+  const hasTag = lastColon > lastSlash;
+  const repository = hasTag ? ref.slice(0, lastColon) : ref;
+  return `${repository}:${t}`;
 }
 
 // ============================================================================
@@ -170,7 +314,7 @@ function cmdInit(repoRoot, dryRun) {
 
   const registryPath = getRegistryPath(repoRoot);
   if (!fs.existsSync(registryPath) && !dryRun) {
-    saveRegistry(repoRoot, { version: 1, targets: [] });
+    saveRegistry(repoRoot, { version: 1, updatedAt: nowIso(), targets: [] });
     actions.push({ op: 'write', path: registryPath });
   }
 
@@ -197,12 +341,12 @@ function cmdList(repoRoot, format) {
   }
 
   for (const target of registry.targets) {
-    console.log(`  [${target.type}] ${target.name}`);
+    console.log(`  [${target.type}] ${target.id}${target.module ? ` -> ${target.module}` : ''}`);
   }
 }
 
-function cmdAdd(repoRoot, name, type) {
-  if (!name) die('[error] --name is required');
+function cmdAdd(repoRoot, id, type, modulePath, dockerfilePath, template, contextPath, image) {
+  if (!id) die('[error] --id is required');
   if (!type) die('[error] --type is required');
 
   const validTypes = ['service', 'job', 'app'];
@@ -211,32 +355,75 @@ function cmdAdd(repoRoot, name, type) {
   }
 
   const registry = loadRegistry(repoRoot);
-  if (registry.targets.find(t => t.name === name)) {
-    die(`[error] Target "${name}" already exists`);
+  if (registry.targets.find(t => t.id === id)) {
+    die(`[error] Target "${id}" already exists`);
   }
 
-  registry.targets.push({ name, type, addedAt: new Date().toISOString() });
+  const dockerfileRel = dockerfilePath ? String(dockerfilePath) : getDefaultDockerfilePath(type, id);
+  const moduleRel = modulePath ? String(modulePath) : undefined;
+  const contextRel = contextPath ? String(contextPath) : (moduleRel || '.');
+  const imageRepo = image ? String(image) : id;
+
+  registry.targets.push({
+    id,
+    type,
+    ...(moduleRel ? { module: moduleRel } : {}),
+    dockerfile: dockerfileRel,
+    context: contextRel,
+    image: imageRepo,
+    addedAt: nowIso()
+  });
   saveRegistry(repoRoot, registry);
 
-  // Create target directory
-  const targetDir = path.join(getPackagingDir(repoRoot), `${type}s`, name);
-  ensureDir(targetDir);
+  // Ensure dockerfile exists (copy-if-missing)
+  ensureDir(path.dirname(path.join(repoRoot, dockerfileRel)));
+  ensureDockerfile(repoRoot, dockerfileRel, template);
 
-  console.log(`[ok] Added packaging target: ${name} (${type})`);
+  console.log(`[ok] Added packaging target: ${id} (${type})`);
 }
 
-function cmdRemove(repoRoot, name) {
-  if (!name) die('[error] --name is required');
+function cmdRemove(repoRoot, id) {
+  if (!id) die('[error] --id is required');
 
   const registry = loadRegistry(repoRoot);
-  const index = registry.targets.findIndex(t => t.name === name);
+  const index = registry.targets.findIndex(t => t.id === id);
   if (index === -1) {
-    die(`[error] Target "${name}" not found`);
+    die(`[error] Target "${id}" not found`);
   }
 
   registry.targets.splice(index, 1);
   saveRegistry(repoRoot, registry);
-  console.log(`[ok] Removed packaging target: ${name}`);
+  console.log(`[ok] Removed packaging target: ${id}`);
+}
+
+function cmdBuild(repoRoot, targetId, tag) {
+  if (!targetId) die('[error] --target is required');
+  const t = String(tag || 'latest').trim() || 'latest';
+
+  const registry = loadRegistry(repoRoot);
+  const target = registry.targets.find((x) => x.id === targetId);
+  if (!target) die(`[error] Target "${targetId}" not found. Run: packctl list`);
+
+  const dockerfileRel = target.dockerfile || getDefaultDockerfilePath(target.type, target.id);
+  const contextRel = target.context || target.module || '.';
+
+  if (!fs.existsSync(path.join(repoRoot, dockerfileRel))) {
+    die(`[error] Dockerfile not found: ${dockerfileRel}`);
+  }
+
+  const imageRepo = target.image || target.id;
+  const imageTag = applyDockerTag(imageRepo, t);
+  runDockerBuild(repoRoot, dockerfileRel, imageTag, contextRel);
+}
+
+function cmdBuildAll(repoRoot, tag) {
+  const registry = loadRegistry(repoRoot);
+  if (registry.targets.length === 0) {
+    die('[error] No targets defined. Run: packctl add-service ...');
+  }
+  for (const target of registry.targets) {
+    cmdBuild(repoRoot, target.id, tag);
+  }
 }
 
 function cmdVerify(repoRoot) {
@@ -250,6 +437,16 @@ function cmdVerify(repoRoot) {
   const registry = loadRegistry(repoRoot);
   if (registry.targets.length === 0) {
     warnings.push('No packaging targets defined');
+  }
+
+  for (const t of registry.targets) {
+    if (!t.dockerfile) {
+      warnings.push(`Target "${t.id}" has no dockerfile path`);
+      continue;
+    }
+    if (!fs.existsSync(path.join(repoRoot, t.dockerfile))) {
+      warnings.push(`Missing Dockerfile for "${t.id}": ${t.dockerfile}`);
+    }
   }
 
   if (errors.length > 0) {
@@ -271,7 +468,7 @@ function cmdStatus(repoRoot, format) {
   const status = {
     initialized: fs.existsSync(getPackagingDir(repoRoot)),
     targets: registry.targets.length,
-    lastUpdated: registry.lastUpdated
+    updatedAt: registry.updatedAt
   };
 
   if (format === 'json') {
@@ -282,7 +479,7 @@ function cmdStatus(repoRoot, format) {
   console.log('Packaging Status:');
   console.log(`  Initialized: ${status.initialized ? 'yes' : 'no'}`);
   console.log(`  Targets: ${status.targets}`);
-  console.log(`  Last updated: ${status.lastUpdated || 'never'}`);
+  console.log(`  Updated at: ${status.updatedAt || 'never'}`);
 }
 
 // ============================================================================
@@ -295,6 +492,9 @@ function main() {
   const format = (opts['format'] || 'text').toLowerCase();
 
   switch (command) {
+    case 'help':
+      usage(0);
+      break;
     case 'init':
       cmdInit(repoRoot, !!opts['dry-run']);
       break;
@@ -302,10 +502,34 @@ function main() {
       cmdList(repoRoot, format);
       break;
     case 'add':
-      cmdAdd(repoRoot, opts['name'], opts['type']);
+      cmdAdd(
+        repoRoot,
+        opts['id'] || opts['name'],
+        opts['type'],
+        opts['module'],
+        opts['dockerfile'],
+        opts['template'],
+        opts['context'],
+        opts['image']
+      );
+      break;
+    case 'add-service':
+      cmdAdd(repoRoot, opts['id'] || opts['name'], 'service', opts['module'], opts['dockerfile'], opts['template'], opts['context'], opts['image']);
+      break;
+    case 'add-job':
+      cmdAdd(repoRoot, opts['id'] || opts['name'], 'job', opts['module'], opts['dockerfile'], opts['template'], opts['context'], opts['image']);
+      break;
+    case 'add-app':
+      cmdAdd(repoRoot, opts['id'] || opts['name'], 'app', opts['module'], opts['dockerfile'], opts['template'], opts['context'], opts['image']);
       break;
     case 'remove':
-      cmdRemove(repoRoot, opts['name']);
+      cmdRemove(repoRoot, opts['id'] || opts['name']);
+      break;
+    case 'build':
+      cmdBuild(repoRoot, opts['target'], opts['tag']);
+      break;
+    case 'build-all':
+      cmdBuildAll(repoRoot, opts['tag']);
       break;
     case 'verify':
       cmdVerify(repoRoot);
