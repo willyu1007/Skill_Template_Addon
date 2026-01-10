@@ -6,7 +6,7 @@ description: Map changed API routes into a testable inventory (method, path, req
 # Map Route Changes for Testing
 
 ## Purpose
-Turn "routes changed in this work" into an actionable test inventory so you can efficiently smoke test what matters.
+Turn “routes changed in this work” into an actionable test inventory so you can efficiently smoke test what matters.
 
 ## When to use
 Use this skill when:
@@ -59,7 +59,7 @@ Use this skill when:
 
 6. **Produce a structured inventory**
    - Output as JSON records (one per endpoint) or a table.
-   - Include "notes" fields where assumptions are made.
+   - Include “notes” fields where assumptions are made.
 
 7. **Use the inventory to test**
    - Execute the happy path first for each endpoint.

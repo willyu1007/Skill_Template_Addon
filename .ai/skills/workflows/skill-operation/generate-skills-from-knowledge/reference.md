@@ -1,25 +1,25 @@
 # Reference: Converting Knowledge Docs into Agent Skills
 
 ## Goal
-Turn "knowledge documents" (guides, runbooks, standards, architecture notes) into **capability-oriented** skills that an agent can select via the `description` signal and execute via the `Steps` section.
+Turn “knowledge documents” (guides, runbooks, standards, architecture notes) into **capability-oriented** skills that an agent can select via the `description` signal and execute via the `Steps` section.
 
 ## Key decisions (apply in this order)
-1. **Discovery-first**: the first sentence (`description`) must help an agent decide "use me now".
+1. **Discovery-first**: the first sentence (`description`) must help an agent decide “use me now”.
 2. **One intent per skill**: if a user can reasonably ask for two different things, split into two skills.
 3. **Progressive disclosure**: keep `SKILL.md` short; move depth into `reference.md`, `examples/`, `templates/`.
 4. **Portability by default**: remove provider- and repo-specific coupling unless explicitly required.
 
 ## Skill identification heuristic
 A good skill is typically centered on one of these:
-- a repeatable workflow ("debug X", "migrate Y", "write Z spec")
-- a concrete artifact ("generate a config", "produce a report", "create a test plan")
-- a bounded domain action ("add middleware", "validate input", "instrument tracing")
+- a repeatable workflow (“debug X”, “migrate Y”, “write Z spec”)
+- a concrete artifact (“generate a config”, “produce a report”, “create a test plan”)
+- a bounded domain action (“add middleware”, “validate input”, “instrument tracing”)
 
 Signals that a source doc should be split:
-- multiple "How to ..." sections with different objects
+- multiple “How to …” sections with different objects
 - multiple audiences (developer vs SRE vs PM)
 - step sequences that share little overlap
-- heavy branching ("if A then ... else ...") that can be separated by trigger
+- heavy branching (“if A then … else …”) that can be separated by trigger
 
 Signals that multiple source docs should be merged:
 - same trigger and same output, different phrasing
@@ -27,14 +27,14 @@ Signals that multiple source docs should be merged:
 
 ## Writing a high-signal `description`
 The description should:
-- start with an action verb ("Generate...", "Convert...", "Debug...", "Validate...")
-- include a discriminating noun phrase ("skills bundle", "API route", "deployment manifest")
+- start with an action verb (“Generate…”, “Convert…”, “Debug…”, “Validate…”)
+- include a discriminating noun phrase (“skills bundle”, “API route”, “deployment manifest”)
 - include at least one trigger phrase that a user might say
 - avoid internal jargon unless it is stable and shared
 
 Examples (style, not content):
-- "Generate an API smoke-test plan for authenticated routes."
-- "Convert Markdown runbooks into portable Agent Skills."
+- “Generate an API smoke-test plan for authenticated routes.”
+- “Convert Markdown runbooks into portable Agent Skills.”
 
 ## Converting source content: what goes where
 ### `SKILL.md` (keep short)
@@ -54,7 +54,7 @@ Put:
 ### `examples/`
 Put:
 - scenario-specific examples (one scenario per file)
-- "good/bad" examples for prompts and outputs
+- “good/bad” examples for prompts and outputs
 - minimal but copy/pasteable samples
 
 ### `templates/`
@@ -67,8 +67,8 @@ Put:
 When converting from repo-specific or provider-specific docs:
 - Replace hard-coded paths with **placeholders** (e.g., `<repo_root>`, `<skills_root>`).
 - Replace script names with **functional descriptions** unless the script is shipped with the skill.
-- Remove tool/platform instructions that require a specific vendor, unless you keep them under "Optional provider notes".
-- Remove cross-skill links ("See also", "Related docs"). Skills should be discoverable without reading chains.
+- Remove tool/platform instructions that require a specific vendor, unless you keep them under “Optional provider notes”.
+- Remove cross-skill links (“See also”, “Related docs”). Skills should be discoverable without reading chains.
 
 ## A plan file is the contract
 The conversion plan is intended to be produced by an agent (or a human) and then applied by the helper script.
@@ -79,7 +79,7 @@ Principles:
 - the plan explicitly records split/merge decisions and rationale
 
 ## Minimal prompt template (for any LLM)
-Use this when asking an LLM to generate or refine a plan:
+Use the following template when asking an LLM to generate or refine a plan:
 
 Goal:
 - Convert the provided knowledge docs into a provider-agnostic Agent Skills bundle.
@@ -118,7 +118,7 @@ The following section defines the skill authoring standard for the repository.
 - You MUST edit skills only in `.ai/skills/`
 - You MUST NOT edit `.codex/skills/` or `.claude/skills/` directly
 - After adding or updating a skill, you MUST sync stubs:
-  - Full sync (reset; requires `--yes`): `node .ai/scripts/sync-skills.cjs --scope current --providers both --mode reset --yes`
+  - Full sync (all skills): `node .ai/scripts/sync-skills.cjs --scope all --providers both --mode reset --yes`
   - Incremental (one skill): `node .ai/scripts/sync-skills.cjs --scope specific --skills <skill-name> --mode update`
 
 ## Naming and Layout
@@ -215,6 +215,95 @@ Before finishing a skill change:
 ## Syncing Notes
 
 - Stub generation discovers skills by recursively finding `SKILL.md` under `.ai/skills/`
-- Provider stubs preserve SSOT hierarchy under `.codex/skills/<taxonomy>/<skill-name>/` and `.claude/skills/<taxonomy>/<skill-name>/`
-- The "current collection" is configured via `.ai/skills/_meta/sync-manifest.json` and synced with:
+- Provider stubs preserve the SSOT directory hierarchy under `.codex/skills/` and `.claude/skills/`
+- The current selection is configured via `.ai/skills/_meta/sync-manifest.json` and synced with:
   - `node .ai/scripts/sync-skills.cjs --scope current --providers both --mode reset --yes`
+
+---
+
+# Skill Design Principles (borrowed)
+
+The following section captures core design principles for authoring high-quality skills.
+
+## Core Principles
+
+### Concise is Key
+
+Context is a shared resource. Only add information that the LLM does not already know:
+- Omit well-known programming patterns and language syntax
+- Focus on project-specific conventions, non-obvious constraints, and domain knowledge
+- Prefer links and references over inline repetition
+
+### Degrees of Freedom
+
+Match instruction specificity to task fragility:
+
+| Freedom Level | When to Use | Example |
+|---------------|-------------|---------|
+| High (text instructions) | Multiple approaches are valid; decision depends on context | "Choose caching strategy based on data access patterns" |
+| Medium (pseudocode / parameterized script) | Preferred pattern exists; some variation allowed | "Use template, adjust timeout as needed" |
+| Low (concrete script, few parameters) | Operation is fragile; consistency is critical | "First run: `python migrate.py --dry-run`" |
+
+Guidelines:
+- Use high freedom for strategic decisions where context matters
+- Use medium freedom for repeatable patterns with known variations
+- Use low freedom for operations where mistakes are costly or hard to reverse
+
+## Progressive Disclosure Design
+
+### Three-Level Loading System
+
+1. **Metadata** (name + description) - Always in context (~100 words)
+   - Must be high-signal: include trigger phrases
+   - Agent uses this to decide "use me now"
+
+2. **SKILL.md body** - Loaded when skill is triggered (<5k words)
+   - Contains purpose, inputs/outputs, steps, boundaries, verification
+   - Should be self-contained for the happy path
+
+3. **Bundled resources** - Loaded on demand (no limit)
+   - `reference.md`: rationale, tradeoffs, edge cases
+   - `examples/`: scenario-specific examples
+   - `templates/`: reusable skeletons and snippets
+
+### Organization Patterns
+
+Choose the pattern that best fits your content:
+
+**Pattern 1: High-Level Guide + References**
+- `SKILL.md` contains the procedure
+- `reference.md` contains deep rationale
+- Best for: single-intent skills with complex background
+
+**Pattern 2: Domain-Organized**
+- `SKILL.md` routes to domain-specific references
+- e.g., `reference/finance.md`, `reference/sales.md`
+- Best for: skills that vary by domain but share structure
+
+**Pattern 3: Variant-Organized**
+- `SKILL.md` routes to variant-specific procedures
+- e.g., `procedures/aws.md`, `procedures/gcp.md`
+- Best for: skills that work differently per platform/provider
+
+## Bundled Resources Best Practices
+
+### What to include
+
+- **`scripts/`**: Executable code that requires deterministic reliability or would be rewritten repeatedly
+- **`reference/`** or **`reference.md`**: Documentation loaded on-demand into context
+- **`templates/`**: Output skeletons and reusable snippets
+- **`examples/`**: Scenario-specific examples (one scenario per file)
+
+### What NOT to include
+
+- `README.md` (use `SKILL.md` instead)
+- `CHANGELOG.md` (use git history)
+- User documentation (belongs in project docs, not skills)
+- Large binary files or logs
+- `resources/` directory (forbidden by lint)
+
+### File naming
+
+- Use kebab-case for all files and directories
+- Use descriptive names that indicate purpose
+- Prefer `.md` for documentation, language-appropriate extensions for code

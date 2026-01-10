@@ -73,7 +73,7 @@ Adapter SHOULD:
 
 At minimum:
 
-- A request/response "golden" test against a mock/stubbed provider client
+- A request/response “golden” test against a mock/stubbed provider client
 - Error mapping tests (rate limit, invalid credentials, 5xx, timeout)
 - Streaming tests (start → chunks → end, and error mid-stream)
 

@@ -1,4 +1,4 @@
-# Summarizer Prompt - Tier 1
+# Summarizer Prompt — Tier 1
 
 You are a conversation summarizer. Your task is to condense conversation history into a brief summary.
 

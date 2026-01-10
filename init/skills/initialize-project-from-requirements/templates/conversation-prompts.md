@@ -21,6 +21,11 @@
 
 Ask the following questions before writing the first draft of `init/stage-a-docs/requirements.md`:
 
+0. **Terminology alignment decision (skip or sync)**
+   - "Do we need to align/confirm domain terminology now?"
+   - If YES (sync): use `init/stage-a-docs/domain-glossary.md` as the SSOT; align terms used in `requirements.md` to the glossary.
+   - If NO (skip): explicitly record “skip terminology sync for now” in `init/stage-a-docs/domain-glossary.md` (and revisit only if terms become ambiguous).
+
 1. **One-line purpose**
    - "In one sentence, what problem does this project solve, for whom, and what is the main outcome?"
 
@@ -112,6 +117,7 @@ During initialization (working location):
 - Scope (MUST/OUT) → `init/stage-a-docs/requirements.md` (`## Goals`, `## Non-goals`)
 - User journeys + AC → `init/stage-a-docs/requirements.md` (`## Users and user journeys`)
 - Constraints/NFR → `init/stage-a-docs/non-functional-requirements.md`
+- Terminology alignment decision → `init/stage-a-docs/domain-glossary.md`
 - Glossary terms/entities → `init/stage-a-docs/domain-glossary.md`
 - TBD decisions/risks → `init/stage-a-docs/risk-open-questions.md`
 - Repo layout/pack selection decisions → `init/project-blueprint.json`
@@ -196,6 +202,7 @@ After the requirements interview, guide the user through choosing the technology
 | JavaScript | ✅ | pnpm |
 | Go | ✅ | go |
 | C/C++ | ✅ | xmake |
+| React Native | ✅ | pnpm |
 | Python | ❌ | poetry |
 | Java | ❌ | gradle |
 | Kotlin | ❌ | gradle |
@@ -207,12 +214,18 @@ After the requirements interview, guide the user through choosing the technology
 - Languages marked ✅: use built-in templates to generate configs
 - Languages not marked ✅: have the LLM generate configs dynamically based on `llm-init-guide.md`
 
+**Blueprint mapping (repo.language)**:
+- C/C++: `c` / `cpp` (or `c-xmake` / `cpp-xmake`), package manager `xmake`
+- React Native: `react-native` (TypeScript template), package manager `pnpm`/`npm`/`yarn`
+
 ### E2. Package manager
 
 **Ask**: "Which package manager should we use?"
 
 Offer options based on the language:
 - TypeScript/JavaScript: "pnpm (recommended), yarn, npm"
+- React Native: "pnpm (recommended), yarn, npm"
+- C/C++: fixed: use `xmake`
 - Python: "poetry (recommended), pip, pipenv, uv"
 - Java/Kotlin: "gradle (recommended), maven"
 - Go: fixed: use `go`

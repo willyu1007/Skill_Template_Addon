@@ -1,4 +1,4 @@
-# E2E Example 01 - Add a provider (OpenAI-style) end-to-end
+# E2E Example 01 — Add a provider (OpenAI-style) end-to-end
 
 ## Scenario
 You need to integrate a new LLM provider behind a single calling surface, using **implicit credentials** and **registry-first** identifiers.

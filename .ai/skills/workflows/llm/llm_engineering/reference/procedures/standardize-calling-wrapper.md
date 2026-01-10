@@ -32,7 +32,7 @@ Create (or refactor) a **single calling surface** for LLM usage so feature code 
 
 4) **Enforce budgets**
    - Apply per-request budgets (tokens / $ / time) using `execution_context`.
-   - Make "budget exceeded" a first-class error.
+   - Make “budget exceeded” a first-class error.
 
 5) **Instrument telemetry**
    - Emit consistent trace/log fields for every call.
@@ -43,7 +43,7 @@ Create (or refactor) a **single calling surface** for LLM usage so feature code 
    - Keep blast radius small: migrate one feature area at a time.
 
 7) **Regression safety**
-   - Add golden tests or snapshot-style tests for the wrapper's canonical request/response mapping.
+   - Add golden tests or snapshot-style tests for the wrapper’s canonical request/response mapping.
    - For streaming: add at least one streaming smoke test.
 
 ## Outputs

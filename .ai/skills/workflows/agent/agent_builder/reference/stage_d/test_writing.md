@@ -24,10 +24,10 @@ Each scenario in `acceptance.scenarios[]` becomes a test case.
 }
 ```
 
-**Generated Test** (using Node.js built-in test runner):
+**Example Test** (using Node.js built-in test runner):
 
 ```javascript
-// tests/acceptance.test.js
+// tests/smoke.test.js
 
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -114,7 +114,7 @@ describe('Acceptance Scenarios', () => {
 
 ```
 tests/
-├── acceptance.test.js    # Generated from acceptance.scenarios
+├── smoke.test.js         # Minimal scaffold; extend it for acceptance coverage
 ├── unit/
 │   ├── tools.test.js     # Tool unit tests
 │   ├── prompts.test.js   # Prompt loading tests
@@ -188,8 +188,8 @@ function createMockTools(toolResponses) {
 # Run all tests
 node --test tests/
 
-# Run acceptance tests only
-node --test tests/acceptance.test.js
+# Run smoke test only (scaffold)
+node --test tests/smoke.test.js
 
 # Run with coverage (Node 20+)
 node --test --experimental-test-coverage tests/
@@ -204,4 +204,3 @@ node --test --experimental-test-coverage tests/
 - [ ] Kill switch scenario tested
 - [ ] Mocks in place for external dependencies
 - [ ] Tests can run offline (no real API calls)
-

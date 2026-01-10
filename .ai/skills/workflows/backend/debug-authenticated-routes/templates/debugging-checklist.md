@@ -1,6 +1,6 @@
 # Template: Authenticated route debugging checklist
 
-Use the checklist below to debug protected API routes that fail with `401`, `403`, or `404`.
+Use the following checklist to debug protected API routes that fail with `401`, `403`, or `404`.
 
 **Redaction rule:** Do **not** paste real tokens, cookie values, API keys, or secrets. Replace values with placeholders like `<REDACTED>`.
 
@@ -15,7 +15,7 @@ Use the checklist below to debug protected API routes that fail with `401`, `403
 
 ### Failing request evidence
 
-- Request (sanitized) - include one of:
+- Request (sanitized) – include one of:
   - `curl ...` (preferred)
   - Postman collection export snippet
   - test invocation command
@@ -52,12 +52,12 @@ Typical causes:
 
 Checks:
 - [ ] Confirm the request includes auth (Section 2)
-- [ ] Confirm authentication middleware is mounted for this route
+- [ ] Confirm authentication middleware is mounted for the target route
 - [ ] If behind a reverse proxy/gateway:
   - [ ] proxy preserves `Authorization` header
   - [ ] proxy forwards cookies
   - [ ] trusted proxy settings match deployment
-- [ ] Confirm server-side token validation inputs (issuer/key/secret) are correct **for this environment**
+- [ ] Confirm server-side token validation inputs (issuer/key/secret) are correct **for the current environment**
 
 ### B) `403 Forbidden` path (auth ok, authorization denied)
 
@@ -68,7 +68,7 @@ Typical causes:
 
 Checks:
 - [ ] Confirm identity/claims used by the permission check (what field(s)?)
-- [ ] Confirm required permission(s) for the route are documented or discoverable
+- [ ] Confirm required permission(s) for the target route are documented or discoverable
 - [ ] Compare expected vs actual claims for the test user (sanitized)
 - [ ] Check for mismatched identifiers in request context (e.g., tenant id)
 - [ ] Confirm the permission check runs in the intended layer (middleware vs service)
@@ -85,13 +85,13 @@ Checks:
 - [ ] Confirm method and path are correct for external path (include base prefix)
 - [ ] Confirm router/controller file is imported and registered
 - [ ] Confirm route order does not shadow the path
-- [ ] Confirm the handler is in the expected service/app (monorepo setups often have multiple servers)
+- [ ] Confirm the handler is in the expected service/app (monorepos often have multiple servers)
 
 ## 4) Apply a minimal fix (approval checkpoint)
 
 Before changing auth/permission policies or middleware behavior:
 
-- [ ] Summarize root cause in 1-3 bullets
+- [ ] Summarize root cause in 1–3 bullets
 - [ ] Propose the **minimal** fix
 - [ ] List side effects / risks
 - [ ] **Obtain approval** to apply changes that impact authentication/authorization behavior
@@ -111,7 +111,7 @@ After the fix:
 
 ## 6) Regression prevention (recommended)
 
-- [ ] Add or update an integration/smoke test for the endpoint (auth + permission)
+- [ ] Add or update an integration/smoke test for the target endpoint (auth + permission)
 - [ ] Add a lightweight monitoring signal:
   - auth failure rate (401/403)
   - route not found rate (404)

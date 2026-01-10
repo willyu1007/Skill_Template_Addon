@@ -9,19 +9,19 @@ description: Create a structured dev-docs task bundle (overview/plan/architectur
 Generate a structured, repeatable “task documentation bundle” so implementation work has clear scope, steps, and verification, and can be handed off cleanly.
 
 ## When to use
-Use this skill when:
+Use the `create-dev-docs-plan` skill when:
 - Starting a non-trivial task or project (非一次性小改动)
 - Work spans multiple modules/services (多模块/多服务)
 - You need a shared plan for multiple contributors (协作/交接)
 - You want a consistent handoff artifact for later context recovery (上下文恢复/归档)
 
 ## Quick decision gate (MUST)
-Use this skill when **any** is true:
+Use the `create-dev-docs-plan` skill when **any** is true:
 - Expected duration is `> 2 hours`, or likely to span multiple sessions
 - Scope touches `>= 2` modules/directories, or requires `>= 3` sequential steps with verification
 - You need explicit handoff/context recovery documentation
 
-Skip this skill when **all** are true:
+Skip the `create-dev-docs-plan` skill when **all** are true:
 - Single-file change
 - Trivial fix (`< 30 min`)
 
@@ -103,6 +103,18 @@ dev-docs/active/<task-slug>/
 - PRODUCES implementation-level documentation bundle (overview, plan, architecture, notes, verification, pitfalls)
 - DOES NOT produce macro-level roadmaps (milestone definitions, scope/impact analysis, rollback strategies)
 - If a macro roadmap exists, use it as input; the `01-plan.md` here captures step-level execution detail, not phase/milestone planning
+
+## Writing and collaboration tips (borrowed)
+
+To make dev-docs usable for both humans and LLMs:
+
+- Write **purpose + outcome first** in `00-overview.md`.
+- Keep paragraphs single-intent; use headings that match the decisions the reader must make.
+- Use MUST/SHOULD/MAY for constraints and invariants.
+- Add verification commands with expected results (especially in `04-verification.md`).
+- Before finalizing, do a quick **reader test**: can a fresh agent answer "what do I do next?" using only the dev-docs bundle?
+
+If dev-docs content is also used for status updates, consider a short **3P (Progress / Plans / Problems)** summary in `handoff.md`.
 
 ## Included assets
 - Templates:

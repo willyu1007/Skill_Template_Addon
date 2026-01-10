@@ -53,7 +53,7 @@ Use this skill when:
    - workflow steps
    - verification
    - troubleshooting
-3. Write the "happy path" first:
+3. Write the “happy path” first:
    - minimal steps to succeed
    - explicit prerequisites
 4. Add progressive disclosure:
@@ -75,7 +75,7 @@ Use this skill when:
 
 ## Boundaries
 - MUST NOT include secrets, credentials, or internal-only URLs in documentation
-- MUST NOT publish unverifiable instructions ("just run it") without commands and expected outcomes
+- MUST NOT publish unverifiable instructions (“just run it”) without commands and expected outcomes
 - MUST NOT copy large code blocks verbatim into top-level docs; move them into `examples/`
 - SHOULD NOT mix multiple topics in a single document section
 - SHOULD keep top-level docs within a reasonable length by using progressive disclosure

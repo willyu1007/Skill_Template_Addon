@@ -9,7 +9,7 @@ description: Execute dependency-aware code refactors (moves, extraction, import 
 Perform non-trivial refactors without breaking builds by planning dependency changes, applying incremental edits, and verifying continuously.
 
 ## When to use
-Use this skill when:
+Use the execute-code-refactor skill when:
 - Reorganizing file/folder structures
 - Breaking large modules/components into smaller units
 - Updating imports after moves
@@ -45,8 +45,8 @@ Avoid using the skill when:
 
 ### 2) Inventory dependencies (required)
 - Use the dependency map template to capture:
-  - incoming imports (who depends on this)
-  - outgoing imports (what it depends on)
+  - incoming imports (who depends on the module)
+  - outgoing imports (what the module depends on)
   - exported symbols and any barrel exports
 
 ### 3) Draft an execution plan (required)
@@ -69,7 +69,7 @@ For each step:
 1. Apply the smallest change (move one file, extract one component, etc.).
 2. Update imports and exports.
 3. Run verification (typecheck/build; tests when applicable).
-4. Record the checkpoint as "green" before proceeding.
+4. Record the checkpoint as “green” before proceeding.
 
 ### 6) Final verification and cleanup
 - Run the full verification suite available (build/typecheck + tests + lint).

@@ -8,15 +8,15 @@ description: Install or update an Agent Skills bundle into a repository SSOT (.a
 ## Purpose
 Standardize the **"landing"** process for Agent Skills so a skills bundle can be applied to **any repository** and consumed by **any LLM/agent runtime** that implements the folder-based `SKILL.md` convention.
 
-The skill provides:
+The land-skills-into-repo skill provides:
 - A repeatable workflow (manual + scripted).
 - A script (`./scripts/land_skills.py`) that performs a safe, auditable install/update with dry-run by default.
 
-**Note**: Provider stubs (for `.codex/skills/`, `.claude/skills/`, etc.) should be generated using `node .ai/scripts/sync-skills.cjs`, not this script.
+**Note**: Provider stubs (for `.codex/skills/`, `.claude/skills/`, etc.) should be generated using `node .ai/scripts/sync-skills.cjs`, not the land_skills.py script.
 
 ## When to use
-Use the skill when:
-- You have a **skills bundle** (folder or `.zip`) and need to **install** the bundle into a target repo's SSOT.
+Use the land-skills-into-repo skill when:
+- You have a **skills bundle** (folder or `.zip`) and need to **install** it into a target repo's SSOT.
 - You need to **update** an existing skills install and want a **diff-aware** process.
 
 Do **not** use the skill when:
@@ -37,7 +37,7 @@ You MAY additionally provide:
 - `config`: A JSON config file (see `./templates/landing-config.*`).
 
 ## Outputs
-This skill writes:
+The skill writes:
 - SSOT install/update:
   - `repo_root/.ai/skills/**` (default) or your chosen `ssot_dir`.
 - Backups (optional, only when overwriting):
@@ -50,7 +50,7 @@ The script always produces a plan/report to stdout; it can also emit JSON via `-
 From the directory that contains the `SKILL.md` (the "skill root"), run:
 
 ```bash
-python ./scripts/land_skills.py \
+python3 ./scripts/land_skills.py \
   --repo-root /path/to/repo \
   --source /path/to/skills-bundle.zip \
   --plan
@@ -58,13 +58,13 @@ python ./scripts/land_skills.py \
 
 Rules:
 - You MUST start with `--plan` for a new repo or unknown state.
-- Do not overwrite files unless you explicitly enable it (see Step 2).
+- Do not overwrite files unless you explicitly enable overwriting (see Step 2).
 
 ### Step 2: Apply (only after review)
 After reviewing the plan output, apply changes:
 
 ```bash
-python ./scripts/land_skills.py \
+python3 ./scripts/land_skills.py \
   --repo-root /path/to/repo \
   --source /path/to/skills-bundle.zip \
   --apply \
@@ -80,7 +80,7 @@ Recommended defaults:
 Run verification after applying:
 
 ```bash
-python ./scripts/land_skills.py \
+python3 ./scripts/land_skills.py \
   --repo-root /path/to/repo \
   --verify
 ```
@@ -94,10 +94,11 @@ The verifier checks:
 After landing skills into the SSOT, generate provider stubs:
 
 ```bash
+# Run from repo root.
 node .ai/scripts/sync-skills.cjs --scope current --providers both --mode reset --yes
 ```
 
-The command generates lightweight wrapper stubs in `.codex/skills/` and `.claude/skills/` that point to the SSOT.
+This generates lightweight wrapper stubs in `.codex/skills/` and `.claude/skills/` that point to the SSOT.
 
 ## Verification
 

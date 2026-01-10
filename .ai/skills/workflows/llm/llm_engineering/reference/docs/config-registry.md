@@ -4,7 +4,7 @@ This document defines how LLM-related configuration is named, stored, reviewed, 
 
 The goal is to avoid:
 
-- scattered "magic strings" for env vars
+- scattered “magic strings” for env vars
 - duplicated or conflicting configuration keys
 - accidental secret leakage
 

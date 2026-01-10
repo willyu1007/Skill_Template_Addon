@@ -43,7 +43,9 @@
     "repo": {
       "type": "object",
       "required": [
-        "layout"
+        "layout",
+        "language",
+        "packageManager"
       ],
       "properties": {
         "layout": {
@@ -60,8 +62,17 @@
             "javascript",
             "python",
             "go",
+            "c",
+            "cpp",
+            "c-xmake",
+            "cpp-xmake",
+            "react-native",
             "java",
+            "kotlin",
             "dotnet",
+            "rust",
+            "ruby",
+            "php",
             "other"
           ]
         },
@@ -73,10 +84,16 @@
             "yarn",
             "pip",
             "poetry",
+            "pipenv",
+            "uv",
             "go",
             "maven",
             "gradle",
             "dotnet",
+            "xmake",
+            "cargo",
+            "bundler",
+            "composer",
             "other"
           ]
         }

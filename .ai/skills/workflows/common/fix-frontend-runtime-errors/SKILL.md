@@ -44,7 +44,7 @@ Use this skill when:
    - add guards and safe defaults where appropriate
    - correct data mapping at boundaries (normalize inputs)
    - ensure error UI (error boundary or safe fallback) where needed
-   - avoid "catch and ignore" patterns
+   - avoid “catch and ignore” patterns
 5. **Verify**
    - reproduction steps no longer fail
    - related flows still work

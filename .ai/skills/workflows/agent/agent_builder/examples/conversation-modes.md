@@ -63,8 +63,8 @@ Hybrid approach combining summary and recent turns.
 
 ### Storage
 
-1. **Summary state** - compressed history
-2. **Recent raw window** - configured by `window_turns` / `window_tokens`
+1. **Summary state** — compressed history
+2. **Recent raw window** — configured by `window_turns` / `window_tokens`
 
 ### Overflow Handling
 
@@ -107,7 +107,7 @@ When the raw window overflows, overflow content is summarized into the summary s
 
 ## See Also
 
-- [Usage Guide](usage.md) - main workflow overview
-- [Blueprint Fields](blueprint-fields.md) - schema reference
-- [Adapter Behaviors](adapter-behaviors.md) - entrypoint runtime details
+- [Usage Guide](usage.md) — main workflow overview
+- [Blueprint Fields](blueprint-fields.md) — schema reference
+- [Adapter Behaviors](adapter-behaviors.md) — entrypoint runtime details
 

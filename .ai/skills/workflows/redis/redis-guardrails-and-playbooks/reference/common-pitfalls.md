@@ -28,7 +28,7 @@ This reference is optimized for assistants: it highlights failure modes that com
 - Use hash tags `{...}` to co-locate keys when you truly need multi-key semantics, or redesign to single-key access.
 
 ## Locking traps
-- Releasing a lock without a unique token can unlock someone else's lock.
+- Releasing a lock without a unique token can unlock someone else’s lock.
 - Always use a unique token and an atomic release (Lua script) if implementing locks in Redis.
 
 ## Pub/Sub reliability

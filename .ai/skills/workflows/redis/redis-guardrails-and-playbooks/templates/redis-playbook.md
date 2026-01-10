@@ -1,4 +1,4 @@
-# Redis Playbook - <Scenario>
+# Redis Playbook — <Scenario>
 
 ## Context
 - Use case: `<cache|sessions|rate limiting|distributed locks|queue/streams|pub/sub>`

@@ -77,6 +77,16 @@ If no task bundle exists yet, use `create-dev-docs-plan` first.
 - SHOULD NOT leave undocumented “tribal knowledge” that blocks the next contributor
 - SHOULD be specific about what works, what is broken, and what to do next
 
+## Reader-test handoff check (borrowed)
+
+Before considering the handoff complete, ensure a fresh reader can answer:
+- What changed?
+- What is the current status?
+- What are the next 3 actions (with commands + file paths)?
+- How do we verify success?
+
+If any of these require "tribal knowledge," add it to `handoff.md` or `03-implementation-notes.md`.
+
 ## Included assets
 - Templates: `./templates/handoff-checklist.md`
 - Examples: `./examples/` includes a sample handoff update.

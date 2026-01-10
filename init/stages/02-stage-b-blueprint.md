@@ -8,6 +8,15 @@ Stage B produces and validates a **project blueprint** that will drive Stage C s
 > 
 > **Final location**: `docs/project/project-blueprint.json` (archived by `cleanup-init --archive`)
 
+## Prerequisite (entering Stage B)
+
+- Stage A is validated and approved (state advanced to `stage: "B"`).
+- Verify current status:
+
+```bash
+node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs status --repo-root .
+```
+
 Reference templates:
 - `init/skills/initialize-project-from-requirements/templates/project-blueprint.example.json`
 - `init/skills/initialize-project-from-requirements/templates/project-blueprint.schema.json`
@@ -73,9 +82,16 @@ The blueprint must specify technology-stack related fields:
 | typescript | ✅ | pnpm |
 | javascript | ✅ | pnpm |
 | go | ✅ | go |
+| c | ✅ | xmake |
+| cpp | ✅ | xmake |
+| react-native | ✅ | pnpm |
 | python | ❌ (LLM-generated) | poetry |
 | java | ❌ (LLM-generated) | gradle |
+| kotlin | ❌ (LLM-generated) | gradle |
 | dotnet | ❌ (LLM-generated) | dotnet |
+| rust | ❌ (LLM-generated) | cargo |
+| ruby | ❌ (LLM-generated) | bundler |
+| php | ❌ (LLM-generated) | composer |
 | other | ❌ (LLM-generated) | - |
 
 For languages without built-in templates, the `apply` command will print guidance and the LLM should generate config files based on `templates/llm-init-guide.md`.
@@ -100,6 +116,8 @@ Optional:
 
 Note: Stage C `apply` will attempt to install the add-on payload from:
 - `addons/context-awareness/payload/` (default; can be overridden via `apply --addons-root`)
+
+Other add-ons are also supported (db-mirror, packaging, deployment, release, observability). See `init/README.md`.
 
 ---
 

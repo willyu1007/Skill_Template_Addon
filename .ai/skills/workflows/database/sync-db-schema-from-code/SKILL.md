@@ -13,7 +13,7 @@ Treat the project codebase as the schema Single Source of Truth (SSOT) and safel
 - execution logging and post-verification
 
 ## When to use
-Use this skill when the user asks to:
+Use the sync-db-schema-from-code skill when the user asks to:
 - apply schema changes from the project to a remote database
 - deploy database migrations to a managed database (cloud or self-hosted)
 - sync Prisma or ORM model changes to an actual database
@@ -33,6 +33,11 @@ Avoid the skill when:
 - Execution strategy:
   - **Default**: Prisma migrate (versioned migrations)
   - Optional (explicitly chosen): Prisma db push
+- Schema scope configuration (optional, PostgreSQL only):
+  - `includeSchemas`: schemas to sync (default: `["public"]`)
+  - `excludeSchemas`: schemas to exclude (e.g., `["extensions", "tiger", "topology"]` for PostGIS)
+  - `shadowDatabaseSchema`: schema for Prisma shadow database (if non-default)
+  - See `./templates/schema-scope-config.md` for configuration guide
 
 ## Outputs
 Create an auditable task log under `dev-docs/active/<task>/db/`:
@@ -46,12 +51,12 @@ Optionally, store machine-readable snapshots under `dev-docs/active/<task>/db/ar
 
 ## Steps
 
-### Phase 0 - Confirm intent and scope
+### Phase 0 — Confirm intent and scope
 1. Confirm the user wants **code → target DB** synchronization (not reverse).
 2. Confirm the target environment (dev/staging/prod) and the target DB type.
 3. Propose a `<task>` slug for `dev-docs/active/<task>/` and confirm it.
 
-### Phase A - Read-only preflight (no DB writes)
+### Phase A — Read-only preflight (no DB writes)
 4. Detect the SSOT approach:
    - Prisma: `prisma/schema.prisma` exists
    - Alembic: `alembic.ini` / `alembic/` exists
@@ -62,56 +67,84 @@ Optionally, store machine-readable snapshots under `dev-docs/active/<task>/db/ar
    - Never ask the user to paste secrets into chat logs
    - Record a **redacted** connection summary in `00-connection-check.md`
 
-6. Validate connectivity using the included script:
+6. **Extension and schema detection** (PostgreSQL only):
+   - Query installed extensions: `SELECT extname, extnamespace::regnamespace FROM pg_extension`
+   - Detect non-public schemas created by extensions (e.g., `tiger`, `topology` for PostGIS)
+   - If extensions are detected:
+     - Inform user about extension schemas found
+     - Ask if schema scope configuration is needed
+     - If yes, guide user to configure `excludeSchemas` (see `./templates/schema-scope-config.md`)
+     - Record extension info in `00-connection-check.md`
+   - Configure Prisma `schemas` array in `schema.prisma` if needed:
+     ```prisma
+     datasource db {
+       provider = "postgresql"
+       url      = env("DATABASE_URL")
+       schemas  = ["public"]  // exclude extension schemas
+     }
+     ```
+   - See `./reference/handling-extensions.md` for detailed guidance
+
+7. Validate connectivity using the included script:
    - `python3 ./scripts/db_connect_check.py --url "$DATABASE_URL" --out "dev-docs/active/<task>/db/00-connection-check.md"`
 
-7. Capture a schema snapshot (for SQLite; for other DBs if drivers are available):
+8. Capture a schema snapshot (for SQLite; for other DBs if drivers are available):
    - `python3 ./scripts/db_schema_snapshot.py --url "$DATABASE_URL" --out "dev-docs/active/<task>/db/artifacts/schema_snapshot.json"`
+   - For PostgreSQL with extensions, use `--exclude-schemas` to filter extension schemas:
+     - `python3 ./scripts/db_schema_snapshot.py --url "$DATABASE_URL" --exclude-schemas extensions,tiger,topology --out "..."`
 
-8. Produce a **diff preview** (no writes):
+9. Produce a **diff preview** (no writes):
    - Prisma (default migrate):
      - Prefer generating a reviewable migration (`--create-only`) for local/dev.
      - For remote/prod deploy: review pending `prisma/migrations/*/migration.sql`.
      - Optionally generate a SQL preview with `prisma migrate diff`.
+     - If schema scope is configured, ensure `prisma migrate diff` respects the `schemas` array.
    - Prisma (explicit push):
      - There is no native `db push --dry-run`; use `prisma migrate diff` as the preview.
      - For high-risk changes, recommend testing on a cloned/staging DB first.
    - Alembic:
      - Generate a revision with `--autogenerate` and review the script before applying.
+     - Use `include_schemas` / `exclude_schemas` in `env.py` if schema filtering is needed.
 
-9. Write `01-schema-drift-report.md` and `02-migration-plan.md`:
-   - summarize intended schema changes
-   - flag destructive operations (drop column/table, type changes)
-   - define verification and rollback strategy
-   - choose strategy: **migrate (default)** vs push (explicit)
+10. Write `01-schema-drift-report.md` and `02-migration-plan.md`:
+    - summarize intended schema changes
+    - flag destructive operations (drop column/table, type changes)
+    - **explicitly note extension-related objects** (functions, types, operators created by extensions)
+    - define verification and rollback strategy
+    - choose strategy: **migrate (default)** vs push (explicit)
 
 ### Approval checkpoint (mandatory)
-10. Ask for explicit user approval before any DB writes, confirming:
-   - target environment and target DB
-   - backup/snapshot readiness (or acceptance of risk)
-   - chosen strategy (migrate default vs push explicit)
-   - whether destructive changes are allowed
+11. Ask for explicit user approval before any DB writes, confirming:
+    - target environment and target DB
+    - schema scope configuration (if PostgreSQL with extensions)
+    - backup/snapshot readiness (or acceptance of risk)
+    - chosen strategy (migrate default vs push explicit)
+    - whether destructive changes are allowed
 
-### Phase B - Apply (DB writes allowed only after approval)
-11. Execute the chosen strategy and log every command in `03-execution-log.md`.
+### Phase B — Apply (DB writes allowed only after approval)
+12. Execute the chosen strategy and log every command in `03-execution-log.md`.
 
-12. Post-verify and record evidence in `04-post-verify.md`:
-   - rerun schema snapshot / Prisma status checks
-   - confirm application compatibility (build/tests as applicable)
-   - confirm no unintended destructive impact
+13. Post-verify and record evidence in `04-post-verify.md`:
+    - rerun schema snapshot / Prisma status checks
+    - confirm application compatibility (build/tests as applicable)
+    - confirm no unintended destructive impact
+    - verify extension objects remain intact (if applicable)
 
-13. SSOT maintenance:
-   - If using Prisma migrate: ensure the migration files and `schema.prisma` are committed together.
-   - If using push: record why, and define how/when the project will move back to versioned migrations.
+14. SSOT maintenance:
+    - If using Prisma migrate: ensure the migration files and `schema.prisma` are committed together.
+    - If using push: record why, and define how/when the project will move back to versioned migrations.
+    - If schema scope is configured: document the configuration in project README or `prisma/README.md`.
 
 ## Verification
 - [ ] Intent is confirmed as **code → target DB**
 - [ ] Target environment and DB type are explicit
 - [ ] Connectivity check completed and saved without secrets
+- [ ] (PostgreSQL) Extension detection completed; schema scope configured if needed
 - [ ] Diff preview produced and reviewed before applying changes
 - [ ] Strategy is explicit (default migrate; push only if explicitly chosen)
 - [ ] Approval gate was respected before any DB writes
 - [ ] Execution log and post-verification evidence are saved under `dev-docs/active/<task>/db/`
+- [ ] (PostgreSQL with extensions) Extension objects verified intact post-migration
 
 ## Boundaries
 - MUST NOT run reverse sync (DB → code) as the primary workflow
@@ -124,6 +157,9 @@ Optionally, store machine-readable snapshots under `dev-docs/active/<task>/db/ar
 
 ## Included assets
 - Templates: `./templates/` for connection, drift, plan, execution log, and verification docs
+  - `schema-scope-config.md`: PostgreSQL schema scope configuration guide
 - Reference: `./reference/` for lightweight connection and strategy guidance
+  - `handling-extensions.md`: PostgreSQL extension handling and troubleshooting
 - Scripts: `./scripts/` for connection checks and schema snapshots
+  - `db_schema_snapshot.py` supports `--exclude-schemas` for PostgreSQL
 - Tests: `./tests/` contains a SQLite smoke test harness for the scripts

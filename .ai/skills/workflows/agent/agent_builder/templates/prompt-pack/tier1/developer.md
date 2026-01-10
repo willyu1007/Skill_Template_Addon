@@ -1,4 +1,4 @@
-# Developer Instructions - Tier 1
+# Developer Instructions — Tier 1
 
 ## Internal Context
 
@@ -55,4 +55,4 @@ This agent operates in a production environment. All responses are logged and ma
 ## Performance Notes
 
 - Target response time: < 2 seconds for simple queries
-- Keep output concise - avoid unnecessary verbosity
+- Keep output concise — avoid unnecessary verbosity

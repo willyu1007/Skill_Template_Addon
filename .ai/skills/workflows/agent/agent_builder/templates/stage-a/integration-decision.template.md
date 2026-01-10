@@ -1,4 +1,4 @@
-# Stage A - Integration Decision (Temporary Workdir)
+# Stage A — Integration Decision (Temporary Workdir)
 
 > This file MUST remain in the temporary agent_builder workdir and MUST NOT be committed to the repo.
 

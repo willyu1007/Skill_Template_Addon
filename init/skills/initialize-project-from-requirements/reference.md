@@ -39,6 +39,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 Use after asking each must-ask question to keep the state board accurate.
 
 Keys:
+- `terminologyAlignment`
 - `onePurpose`
 - `userRoles`
 - `mustRequirements`

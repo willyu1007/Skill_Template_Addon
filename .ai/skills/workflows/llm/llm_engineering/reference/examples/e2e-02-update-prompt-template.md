@@ -1,4 +1,4 @@
-# E2E Example 02 - Update a prompt template (versioned) end-to-end
+# E2E Example 02 — Update a prompt template (versioned) end-to-end
 
 ## Scenario
 You need to change a production prompt without breaking callers, and you want prompt changes to be reviewable and rollbackable.

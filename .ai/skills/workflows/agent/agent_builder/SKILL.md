@@ -10,9 +10,9 @@ metadata:
 
 You are `agent_builder`: an **Agent Build Engineer** who turns a real feature request into a **repo-integrated, production-ready Agent**.
 
-The skill is designed for **actual workflows** (not demos). The generated agent may be non-generic, but the agent must be:
+The agent_builder skill is designed for **actual workflows** (not demos). The generated agent may be non-generic, but the agent must be:
 - embedded into a concrete production integration point,
-- runnable (not just a scaffold - tools and prompts are implemented),
+- runnable (not just a scaffold — tools and prompts are implemented),
 - configurable without secrets committed to the repo,
 - testable and maintainable (docs + registry entry + verification evidence),
 - structured with **Core vs Adapters** separation.
@@ -30,8 +30,8 @@ When a user requests "I want an Agent with X capability", execute the following 
 **Actions**:
 1. Extract from user request:
    - Functional goal (what the agent should do)
-   - Integration target (where it will be embedded)
-   - Trigger type (how it will be invoked)
+   - Integration target (where the agent will be embedded)
+   - Trigger type (how the agent will be invoked)
    - Expected output format
 2. Identify implicit constraints:
    - Data sensitivity (PII, confidential, internal, public)
@@ -41,7 +41,7 @@ When a user requests "I want an Agent with X capability", execute the following 
 
 **Output**: Verbal confirmation of understanding.
 
-### Phase 1: Stage A - Interview
+### Phase 1: Stage A — Interview
 
 **Actions**:
 1. Run: `node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js start`
@@ -65,14 +65,14 @@ Stage A complete. Please review the integration decision:
 Type "approve A" to proceed to Blueprint generation.
 ```
 
-**On Approval**: Run `node .../agent-builder.js approve --workdir <WORKDIR> --stage A`
+**On Approval**: Run `node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js approve --workdir <WORKDIR> --stage A`
 
-### Phase 2: Stage B - Blueprint
+### Phase 2: Stage B — Blueprint
 
 **Actions**:
 1. Encode all decisions into `stage-b/agent-blueprint.json` following the schema at `templates/agent-blueprint.schema.json`.
 2. Ensure all required blocks are present and valid.
-3. Run validation: `node .../agent-builder.js validate-blueprint --workdir <WORKDIR>`
+3. Run validation: `node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js validate-blueprint --workdir <WORKDIR>`
 4. If validation fails, fix errors and re-validate.
 
 **Checkpoint**: Present blueprint summary and request explicit user approval.
@@ -89,19 +89,19 @@ Blueprint validated successfully. Key configuration:
 Type "approve B" to proceed to scaffolding.
 ```
 
-**On Approval**: Run `node .../agent-builder.js approve --workdir <WORKDIR> --stage B`
+**On Approval**: Run `node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js approve --workdir <WORKDIR> --stage B`
 
-### Phase 3: Stage C - Scaffold
+### Phase 3: Stage C — Scaffold
 
 **Actions**:
-1. Run plan first: `node .../agent-builder.js plan --workdir <WORKDIR> --repo-root .`
+1. Run plan first: `node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js plan --workdir <WORKDIR> --repo-root .`
 2. Present the file list to be created.
-3. Run apply: `node .../agent-builder.js apply --workdir <WORKDIR> --repo-root . --apply`
+3. Run apply: `node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js apply --workdir <WORKDIR> --repo-root . --apply`
 4. Report created files and any skipped files.
 
 **Output**: List of generated files organized by category (code, docs, config).
 
-### Phase 4: Stage D - Implement (Manual / LLM-assisted)
+### Phase 4: Stage D — Implement (Manual / LLM-assisted)
 
 > **Note:** Stage D is manual; the scaffold generates placeholders that require implementation.
 
@@ -117,22 +117,22 @@ Type "approve B" to proceed to scaffolding.
    - Write `prompts/developer.md` with internal instructions
 
 3. **Expand Tests**: For each scenario in `acceptance.scenarios[]`:
-   - Write test case in `tests/acceptance.test.js`
+   - Add/extend tests under `tests/` (scaffold includes `tests/smoke.test.js`)
    - Include given/when/then structure
    - Include expected_output_checks as assertions
 
 **Output**: Implemented components with file paths.
 
-### Phase 5: Stage E - Verify
+### Phase 5: Stage E — Verify
 
 **Actions**:
-1. Run verification: `node .../agent-builder.js verify --workdir <WORKDIR> --repo-root .`
+1. Run verification: `node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js verify --workdir <WORKDIR> --repo-root .`
 2. Review generated evidence:
    - `stage-e/verification-evidence.json` (structured data)
    - `stage-e/verification-report.md` (human-readable summary)
 3. If any scenario fails, investigate and fix.
 4. Update docs if needed based on implementation.
-5. Cleanup: `node .../agent-builder.js finish --workdir <WORKDIR> --apply`
+5. Cleanup: `node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js finish --workdir <WORKDIR> --apply`
 
 **Output**: Verification report and final delivery summary.
 
@@ -140,7 +140,7 @@ Type "approve B" to proceed to scaffolding.
 
 ## Non-negotiable Constraints
 
-- **Stage A Interview must not write to the repo.** Use a temporary workdir and delete the workdir at the end.
+- **Stage A Interview must not write to the repo.** Use a temporary workdir and delete it at the end.
 - **User must explicitly approve**:
   - the integration decision (Stage A → B),
   - the blueprint (Stage B → C).
@@ -156,9 +156,9 @@ Type "approve B" to proceed to scaffolding.
 
 ---
 
-## Workflow Stages (A-E)
+## Workflow Stages (A–E)
 
-### Stage A - Interview (temporary workdir only)
+### Stage A — Interview (temporary workdir only)
 
 1. Create a temporary workdir via `agent-builder.js start`.
 2. Use the **Decision Checklist** (`reference/decision_checklist.md`) to capture all required decisions.
@@ -167,21 +167,21 @@ Type "approve B" to proceed to scaffolding.
    - `stage-a/integration-decision.md`
 4. **Stop and request explicit user approval.**
 
-### Stage B - Blueprint (JSON)
+### Stage B — Blueprint (JSON)
 
 1. Encode decisions into `stage-b/agent-blueprint.json`.
 2. Ensure required blocks and enums are present (API + selected attachments).
 3. Run validation (`validate-blueprint`).
 4. **Stop and request explicit user approval of the blueprint.**
 
-### Stage C - Scaffold (repo writes)
+### Stage C — Scaffold (repo writes)
 
 1. Generate the complete agent module under `agents/<agent_id>/`.
 2. Generate docs under `agents/<agent_id>/doc/`.
 3. Create/update registry at `agents/registry.json`.
 4. Do not overwrite existing files; skip and report.
 
-### Stage D - Implement (manual / LLM-assisted)
+### Stage D — Implement (manual / LLM-assisted)
 
 1. Implement real tool logic in `src/core/tools.js` based on blueprint tool definitions.
 2. Write prompt pack content (`prompts/*.md`) based on agent scope and security policy.
@@ -190,7 +190,7 @@ Type "approve B" to proceed to scaffolding.
 
 > Stage D is performed manually by the developer or with LLM assistance. The scaffold provides placeholders; actual implementation is project-specific.
 
-### Stage E - Verify + Cleanup
+### Stage E — Verify + Cleanup
 
 1. Run `verify` command to execute acceptance scenarios.
 2. Generate verification evidence (JSON + Markdown).

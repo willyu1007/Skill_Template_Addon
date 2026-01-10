@@ -98,7 +98,7 @@ Record in: `stage-b/agent-blueprint.json` (`deliverables.*`).
 Record in: `stage-a/interview-notes.md`, `stage-b/agent-blueprint.json` (`lifecycle.*`).
 
 ## Verification
-- `stage-a` artifacts exist only in the temporary workdir (not in the repo).
+- `stage-a/` artifacts exist only in the temporary workdir (not in the repo).
 - `stage-b/agent-blueprint.json` passes `validate-blueprint` with no errors.
 - All required decisions above are represented in `stage-b/agent-blueprint.json`.
 

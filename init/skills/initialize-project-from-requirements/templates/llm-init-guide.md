@@ -19,7 +19,7 @@ The document provides **step-by-step guidance** for an AI assistant to help a us
 5. [Phase 4: Add-on recommendations](#phase-4-add-on-recommendations)
 6. [Phase 5: Configuration generation](#phase-5-configuration-generation)
 7. [Post-init: Record key info in AGENTS.md](#post-init-record-key-info-in-agentsmd)
-7. [Decision tree reference](#decision-tree-reference)
+8. [Decision tree reference](#decision-tree-reference)
 
 ---
 
@@ -63,15 +63,16 @@ user starts initialization
 
 ### Must-ask checklist
 
-Ask the 7 must-ask questions in order. See **Module A** in `conversation-prompts.md` for the detailed question templates:
+Ask the 8 must-ask questions in order. See **Module A** in `conversation-prompts.md` for the detailed question templates:
 
-1. One-sentence purpose
-2. Primary user roles
-3. Must-have features
-4. Explicit exclusions
-5. User journeys
-6. Hard constraints
-7. Success metrics
+1. Terminology alignment decision (skip or sync; glossary is SSOT)
+2. One-sentence purpose
+3. Primary user roles
+4. Must-have features
+5. Explicit exclusions
+6. User journeys
+7. Hard constraints
+8. Success metrics
 
 For projects with specific capabilities, also use the **branch modules** in `conversation-prompts.md`:
 - B1: API module
@@ -103,6 +104,7 @@ During initialization, write the answers into these files (working location):
 | JavaScript | ✅ | pnpm, npm, yarn |
 | Go | ✅ | go |
 | C/C++ | ✅ | xmake |
+| React Native | ✅ | pnpm, npm, yarn |
 | Python | ❌ (LLM-generated) | pip, poetry, pipenv, uv |
 | Java | ❌ (LLM-generated) | maven, gradle |
 | Kotlin | ❌ (LLM-generated) | maven, gradle |
@@ -110,6 +112,10 @@ During initialization, write the answers into these files (working location):
 | Rust | ❌ (LLM-generated) | cargo |
 | Ruby | ❌ (LLM-generated) | bundler |
 | PHP | ❌ (LLM-generated) | composer |
+
+Blueprint mapping notes:
+- C/C++: `repo.language: c|cpp`, `repo.packageManager: xmake`
+- React Native: `repo.language: react-native` (TypeScript template)
 
 ### 2.2 Framework selection (by language)
 

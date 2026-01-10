@@ -64,4 +64,23 @@ description: Playwright Web UI E2E automation: bootstrap, author specs, run/debu
 - Do not edit `.codex/skills/` or `.claude/skills/` directly (generated).
 - Do not introduce new test frameworks if Playwright already exists.
 - Do not rely on production data or production credentials.
-- Do not disable assertions to “make tests pass”; fix the underlying determinism issue.
+- Do not disable assertions to "make tests pass"; fix the underlying determinism issue.
+
+## Reconnaissance-then-action workflow (borrowed)
+
+When adding or debugging Playwright E2E tests:
+
+1. **Reconnaissance**
+   - Confirm the target app is running and reachable.
+   - Use Playwright's inspector or trace viewer to inspect the rendered DOM.
+   - Identify stable selectors (`data-testid`, `data-test`, or role-based locators).
+   - Prefer explicit assertions with auto-wait over arbitrary timeouts.
+
+2. **Action**
+   - Implement the interaction using stable selectors.
+   - Assert on outcomes (visible UI state, route, network behavior) rather than layout details.
+
+### If Cypress and Playwright skills are both loaded
+
+- Do not attempt to use both frameworks in the same test suite.
+- Choose the framework already present in the repo (or explicitly requested by the user) and proceed with that skill's procedures.

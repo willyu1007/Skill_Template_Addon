@@ -29,6 +29,15 @@ The command creates:
 - `init/project-blueprint.json` - Blueprint template
 - `init/.init-state.json` - State tracking file
 
+### Preflight (recommended): terminology alignment
+
+Before drafting Stage A docs, ask whether the user wants to align/confirm terminology now.
+
+- If YES (sync): use `init/stage-a-docs/domain-glossary.md` as the terminology SSOT and align terms across Stage A docs.
+- If NO (skip): record the decision in `init/stage-a-docs/domain-glossary.md` and continue.
+
+See: `init/stages/00-preflight-terminology.md`.
+
 ### 1) Stage A: validate docs → approve
 ```bash
 # Edit templates in init/stage-a-docs/, then validate:

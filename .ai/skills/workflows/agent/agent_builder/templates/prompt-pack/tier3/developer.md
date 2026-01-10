@@ -1,8 +1,8 @@
-# Developer Instructions - Tier 3
+# Developer Instructions — Tier 3
 
 ## Internal Context
 
-This agent operates in a high-reliability production environment with:
+The agent operates in a high-reliability production environment with:
 - Strict audit requirements
 - Complex workflow orchestration
 - Multi-tool dependencies

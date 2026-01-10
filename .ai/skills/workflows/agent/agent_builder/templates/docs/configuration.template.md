@@ -1,4 +1,4 @@
-# {{agent_name}} - Configuration
+# {{agent_name}} — Configuration
 
 ## Environment variables
 

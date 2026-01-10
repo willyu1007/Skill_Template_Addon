@@ -1,4 +1,4 @@
-# Examples - Tier 2
+# Examples — Tier 2
 
 ## 1. Simple Query (No Tools)
 

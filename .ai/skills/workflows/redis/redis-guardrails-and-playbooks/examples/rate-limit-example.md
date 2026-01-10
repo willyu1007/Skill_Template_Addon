@@ -1,4 +1,4 @@
-# Redis Playbook - Rate Limiting (Example)
+# Redis Playbook — Rate Limiting (Example)
 
 ## Context
 - Use case: `rate limiting`

@@ -12,7 +12,7 @@ description: Entry workflow for LLM engineering tasks (provider integration, cal
 
 ## Routing (pick one procedure)
 
-| Task | Open this procedure |
+| Task | Open the procedure |
 |---|---|
 | Add / integrate a provider | `reference/procedures/add-provider.md` |
 | Standardize or introduce a single calling wrapper | `reference/procedures/standardize-calling-wrapper.md` |
@@ -68,6 +68,6 @@ Open **one** example only if you need a concrete template.
 
 ## Boundaries
 - Do not edit `.codex/skills/` or `.claude/skills/` directly (generated).
-- Do not add MCP-related content (out of scope for the llm_engineering workflow).
+- Do not add MCP-related content (out of scope for this workflow).
 - Do not create new top-level directories for LLM work; keep assets under existing conventions (`.ai/`, `.system/`).
 - Do not add provider SDK calls directly into product/feature code.

@@ -1,6 +1,6 @@
 # Prompt Pack Writing Guide
 
-This document provides guidance for writing the prompt pack files in Stage D.
+The following guide provides guidance for writing the prompt pack files in Stage D.
 
 ---
 

@@ -1,4 +1,4 @@
-# Summarizer Prompt - Tier 2
+# Summarizer Prompt — Tier 2
 
 You are a conversation summarizer for an AI agent. Your task is to maintain an accurate, concise summary of conversation history.
 

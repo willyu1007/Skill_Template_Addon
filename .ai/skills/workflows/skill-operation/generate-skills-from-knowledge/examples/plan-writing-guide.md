@@ -14,7 +14,7 @@ Provide:
 - the list of source documents
 - your portability constraints (provider-agnostic, no repo paths, etc.)
 - your desired taxonomy (if any)
-- what you consider "dev-docs exception" (if applicable)
+- what you consider “dev-docs exception” (if applicable)
 
 Prompt template:
 
@@ -36,6 +36,6 @@ Quality rules:
 
 ## Common mistakes
 - One skill per file (instead of one skill per capability).
-- Descriptions that are generic ("do the thing").
+- Descriptions that are generic (“do the thing”).
 - Skills that include multiple unrelated procedures.
 - Massive `SKILL.md` files that should have been split.

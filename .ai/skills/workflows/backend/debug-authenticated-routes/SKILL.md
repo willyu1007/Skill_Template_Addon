@@ -75,7 +75,7 @@ Common root-cause categories:
 
 ### 5) Approval checkpoint (required for auth/policy changes)
 Before applying any change that impacts authentication/authorization behavior:
-- Summarize the root cause in 1-3 bullets.
+- Summarize the root cause in 1–3 bullets.
 - Propose the **minimal** fix.
 - List expected side effects / risks.
 - Obtain explicit approval.
@@ -103,7 +103,7 @@ Before applying any change that impacts authentication/authorization behavior:
 
 ## Boundaries
 - MUST NOT paste real tokens, session cookies, API keys, or credentials into artifacts
-- MUST NOT weaken production auth/permission checks to "make the request work"
+- MUST NOT weaken production auth/permission checks to “make the request work”
 - MUST gate auth/permission policy changes behind explicit approval
 - SHOULD add a regression test when the issue was systemic (middleware order, shared auth logic)
 - SHOULD NOT assume cookie/token is attached without confirming

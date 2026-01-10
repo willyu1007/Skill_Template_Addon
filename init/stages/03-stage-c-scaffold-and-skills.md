@@ -5,10 +5,10 @@
 Stage C applies the blueprint to the repository:
 
 - create minimal directory scaffold
-- generate configuration files (SSOT: `scripts/scaffold-configs.cjs`)
+- generate configuration files (SSOT: `init/skills/initialize-project-from-requirements/scripts/scaffold-configs.cjs`)
 - enable skill packs (manifest / skillsctl scheme A)
 - sync provider wrappers (`.ai/scripts/sync-skills.cjs`)
-- optionally install/initialize add-ons (context awareness)
+- optionally install/initialize add-ons (context awareness, db-mirror, packaging, deployment, release, observability)
 - optionally create DevOps convention scaffold (`ops/`)
 
 ---
@@ -30,6 +30,8 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
   --apply
 ```
 
+Note: `scaffold` only creates directories/placeholders. It does not generate configs, enable packs, or sync wrappers.
+
 ---
 
 ## Apply (recommended path)
@@ -47,7 +49,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 1. Validates the blueprint (same as `validate`)
 2. Optionally validates Stage A docs (when `--require-stage-a` is set)
 3. Applies scaffold (idempotent; "write-if-missing" for docs)
-4. Generates config files via `scripts/scaffold-configs.cjs`
+4. Generates config files via `init/skills/initialize-project-from-requirements/scripts/scaffold-configs.cjs`
 5. If context awareness is enabled in the blueprint:
    - installs missing add-on payload files from `addons/context-awareness/payload/` (copy-if-missing)
    - runs `.ai/scripts/contextctl.js init`
@@ -84,4 +86,10 @@ Optional: remove `init/` bootstrap kit after completion:
 
 ```bash
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs cleanup-init --repo-root . --apply --i-understand
+```
+
+If you want to keep Stage A docs + blueprint long-term, prefer:
+
+```bash
+node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs cleanup-init --repo-root . --apply --i-understand --archive
 ```

@@ -1,11 +1,11 @@
-# Stage A - Interview Notes (Temporary Workdir)
+# Stage A — Interview Notes (Temporary Workdir)
 
 > This file MUST remain in the temporary agent_builder workdir and MUST NOT be committed to the repo.
 
 ## Agent identity
 - Proposed `agent.id`:
 - Proposed `agent.name`:
-- Summary (1-3 sentences):
+- Summary (1–3 sentences):
 
 ## Problem framing (Decision Checklist #1)
 - Goal / user value:

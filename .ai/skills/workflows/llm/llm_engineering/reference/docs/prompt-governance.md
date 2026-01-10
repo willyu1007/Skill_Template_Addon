@@ -30,7 +30,7 @@ Each template must define a schema for `variables`.
 
 Guidelines:
 
-- prefer explicit fields over "blob JSON"
+- prefer explicit fields over “blob JSON”
 - define enums for values that affect output behavior
 - forbid untrusted raw HTML / code unless intentionally allowed
 
@@ -49,7 +49,7 @@ Use a structured message layout:
 - developer: product rules and formatting constraints
 - user: user input and context
 
-Keep "business rules" out of the user message when possible.
+Keep “business rules” out of the user message when possible.
 
 ## Regression testing (minimum)
 

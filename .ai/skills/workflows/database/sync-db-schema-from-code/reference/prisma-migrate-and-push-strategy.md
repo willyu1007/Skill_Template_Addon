@@ -21,7 +21,7 @@ Pick one:
 - Remote/prod: `migrate deploy` to apply committed migrations.
 
 ## db push (explicit)
-### What db push does
+### What it is
 - Synchronizes the database schema to match `schema.prisma` without generating migration files.
 
 ### Previewing changes

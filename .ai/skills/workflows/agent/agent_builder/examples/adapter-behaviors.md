@@ -54,8 +54,8 @@ The default worker is a **file-queue** implementation.
 ### File Lifecycle
 
 After processing, input files are moved to:
-- `<input_dir>/.done/` - on success
-- `<input_dir>/.failed/` - on failure or invalid JSON
+- `<input_dir>/.done/` — on success
+- `<input_dir>/.failed/` — on failure or invalid JSON
 
 > This is a placeholder for real queues/topics/task tables.
 
@@ -108,7 +108,7 @@ const response = await runAgent(request, options);
 
 ## See Also
 
-- [Usage Guide](usage.md) - main workflow overview
-- [Blueprint Fields](blueprint-fields.md) - schema reference
-- [Conversation Modes](conversation-modes.md) - memory strategy details
+- [Usage Guide](usage.md) — main workflow overview
+- [Blueprint Fields](blueprint-fields.md) — schema reference
+- [Conversation Modes](conversation-modes.md) — memory strategy details
 

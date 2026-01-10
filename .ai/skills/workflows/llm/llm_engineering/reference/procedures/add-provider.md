@@ -23,7 +23,7 @@ Integrate a new provider **behind a single calling surface** (adapter/gateway/cl
    - Edit: `.ai/llm-config/registry/providers.yaml`
    - Capture: endpoint/regions, supported features, default timeouts, rate limits, notes.
 
-3) **Credentials: reference, don't store**
+3) **Credentials: reference, don’t store**
    - Use `credential_ref` (non-secret pointer to your secrets manager).
    - If new env/config keys are introduced:
      - Register them in: `.ai/llm-config/registry/config_keys.yaml`

@@ -1,4 +1,4 @@
-# {{agent_name}} - Data flow and compliance
+# {{agent_name}} — Data flow and compliance
 
 ## Data classification
 - classes: {{data_classes}}

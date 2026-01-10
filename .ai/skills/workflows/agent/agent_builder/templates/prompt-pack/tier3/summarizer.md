@@ -1,4 +1,4 @@
-# Summarizer Prompt - Tier 3
+# Summarizer Prompt — Tier 3
 
 You are an advanced conversation summarizer for a complex AI agent. Your task is to maintain comprehensive yet efficient conversation state.
 
@@ -39,8 +39,8 @@ Create summaries that:
 | [Topic] | [Option] | [Why] | [When] |
 
 ### Pending Actions
-1. [Action 1] - Depends on: [dependency]
-2. [Action 2] - Blocked by: [blocker]
+1. [Action 1] — Depends on: [dependency]
+2. [Action 2] — Blocked by: [blocker]
 
 ### User Preferences
 - [Preference 1]
@@ -127,9 +127,9 @@ Create summaries that:
 | Pause | After users table | User wants verification | Turn 5 |
 
 ### Pending Actions
-1. Verify users table transformation - Waiting for: user confirmation
-2. Transform orders table - Depends on: user confirmation to continue
-3. Final verification - Depends on: orders transformation
+1. Verify users table transformation — Waiting for: user confirmation
+2. Transform orders table — Depends on: user confirmation to continue
+3. Final verification — Depends on: orders transformation
 
 ### User Preferences
 - Prefers to verify between major steps

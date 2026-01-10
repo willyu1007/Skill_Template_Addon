@@ -37,15 +37,15 @@ When a blueprint is applied, `agent_builder` generates:
 
 ---
 
-## 3) Staged Flow (A-E)
+## 3) Staged Flow (A–E)
 
 | Stage | Purpose | Artifacts | Checkpoint |
 |-------|---------|-----------|------------|
 | **A** | Interview | `stage-a/interview-notes.md`, `stage-a/integration-decision.md` | User approval required |
 | **B** | Blueprint | `stage-b/agent-blueprint.json` | User approval required |
-| **C** | Scaffold | Code + docs + registry in repo | - |
-| **D** | Implement | Real domain logic in `src/core/` | - |
-| **E** | Verify | Acceptance scenarios + cleanup | - |
+| **C** | Scaffold | Code + docs + registry in repo | — |
+| **D** | Implement | Real domain logic in `src/core/` | — |
+| **E** | Verify | Acceptance scenarios + cleanup | — |
 
 **Rule:** During Stage A, do not write anything to the repo. Artifacts live in a temporary workdir.
 
@@ -78,20 +78,20 @@ This script is dependency-free (Node.js only).
 node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js start
 
 # Approve Stage A
-node .../agent-builder.js approve --workdir <WORKDIR> --stage A
+node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js approve --workdir <WORKDIR> --stage A
 
 # Validate and approve Stage B
-node .../agent-builder.js validate-blueprint --workdir <WORKDIR>
-node .../agent-builder.js approve --workdir <WORKDIR> --stage B
+node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js validate-blueprint --workdir <WORKDIR>
+node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js approve --workdir <WORKDIR> --stage B
 
 # Apply scaffold
-node .../agent-builder.js apply --workdir <WORKDIR> --repo-root . --apply
+node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js apply --workdir <WORKDIR> --repo-root . --apply
 
 # Verify acceptance scenarios
-node .../agent-builder.js verify --workdir <WORKDIR> --repo-root .
+node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js verify --workdir <WORKDIR> --repo-root .
 
 # Cleanup (--apply required to actually delete)
-node .../agent-builder.js finish --workdir <WORKDIR> --apply
+node .ai/skills/workflows/agent/agent_builder/scripts/agent-builder.js finish --workdir <WORKDIR> --apply
 ```
 
 ---

@@ -59,7 +59,7 @@ For the canonical JSON Schema, see:
 
 | Field | Allowed Values | Default |
 |-------|---------------|---------|
-| `conversation.mode` | `no-need`, `buffer`, `buffer_window`, `summary`, `summary_buffer` | - |
+| `conversation.mode` | `no-need`, `buffer`, `buffer_window`, `summary`, `summary_buffer` | — |
 | `conversation.summary.update_method` | `llm`, `heuristic` | `llm` |
 | `conversation.summary.refresh_policy` | `every_turn`, `threshold`, `periodic` | `threshold` |
 | `conversation.summary.update_timing` | `after_turn`, `async_post_turn` | varies (see below) |
@@ -72,7 +72,7 @@ For the canonical JSON Schema, see:
 
 ## See Also
 
-- [Usage Guide](usage.md) - main workflow overview
-- [Adapter Behaviors](adapter-behaviors.md) - entrypoint runtime details
-- [Conversation Modes](conversation-modes.md) - memory strategy details
+- [Usage Guide](usage.md) — main workflow overview
+- [Adapter Behaviors](adapter-behaviors.md) — entrypoint runtime details
+- [Conversation Modes](conversation-modes.md) — memory strategy details
 

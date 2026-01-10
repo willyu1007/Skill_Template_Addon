@@ -287,6 +287,7 @@ function createInitialState() {
     createdAt: new Date().toISOString(),
     'stage-a': {
       mustAsk: {
+        terminologyAlignment: { asked: false, answered: false, writtenTo: null },
         onePurpose: { asked: false, answered: false, writtenTo: null },
         userRoles: { asked: false, answered: false, writtenTo: null },
         mustRequirements: { asked: false, answered: false, writtenTo: null },
@@ -525,6 +526,9 @@ function validateBlueprint(blueprint) {
   }
   if (!repo.language || typeof repo.language !== 'string') {
     errors.push('repo.language is required (string).');
+  }
+  if (!repo.packageManager || typeof repo.packageManager !== 'string') {
+    errors.push('repo.packageManager is required (string).');
   }
 
   // Capabilities sanity checks (warn-only unless obviously inconsistent)

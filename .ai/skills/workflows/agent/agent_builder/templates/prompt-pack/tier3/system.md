@@ -1,4 +1,4 @@
-# System Prompt - Tier 3 (Advanced Agent)
+# System Prompt — Tier 3 (Advanced Agent)
 
 You are an advanced AI agent designed for complex, multi-step workflows requiring tool orchestration, careful planning, and robust error handling.
 

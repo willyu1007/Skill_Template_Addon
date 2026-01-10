@@ -1,4 +1,4 @@
-# E2E Example 03 - Add a model routing profile end-to-end
+# E2E Example 03 — Add a model routing profile end-to-end
 
 ## Scenario
 You want feature code to request a **business intent** (profile) instead of a hard-coded provider/model.

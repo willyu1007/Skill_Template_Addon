@@ -10,6 +10,17 @@ Produce a verifiable set of requirement documents.
 > 
 > **Final location**: `docs/project/` (archived by `cleanup-init --archive`)
 
+## Pre-step (must-ask): Terminology alignment
+
+See: `init/stages/00-preflight-terminology.md`.
+
+Before drafting the Stage A docs, ask the user:
+- whether they want to **sync/align terminology now**
+- or **skip** and proceed
+
+If they choose to sync, treat `init/stage-a-docs/domain-glossary.md` as the terminology SSOT and align terms used in `requirements.md`.
+If they choose to skip, record the decision in `init/stage-a-docs/domain-glossary.md` and proceed.
+
 ## Outputs (files)
 
 During initialization (working location):
@@ -42,6 +53,15 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 ## State tracking (recommended)
 
 Use `mark-must-ask` to keep the must-ask checklist updated in `init/.init-state.json`:
+
+```bash
+node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs mark-must-ask \
+  --repo-root . \
+  --key terminologyAlignment \
+  --asked \
+  --answered \
+  --written-to init/stage-a-docs/domain-glossary.md
+```
 
 ```bash
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs mark-must-ask \

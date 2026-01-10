@@ -1,4 +1,4 @@
-# Redis Playbook - Cache (Example)
+# Redis Playbook — Cache (Example)
 
 ## Context
 - Use case: `cache`

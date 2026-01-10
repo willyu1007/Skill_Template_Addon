@@ -9,7 +9,7 @@ The design goals are:
 3. **Control**: routing profiles, budgets, and release gates are centrally managed.
 4. **Observability**: every call is traceable and cost-attributable.
 
-> This repository is a template. The "modules" below may map to services/libraries/packages depending on your actual system.
+> This repository is a template. The “modules” below may map to services/libraries/packages depending on your actual system.
 
 ## Logical components
 
@@ -29,7 +29,7 @@ Typical responsibilities:
 Anti-patterns:
 
 - Feature code importing provider SDKs directly
-- Per-feature "mini gateways" with divergent configs and error handling
+- Per-feature “mini gateways” with divergent configs and error handling
 
 ### 2) Provider adapters
 
@@ -46,7 +46,7 @@ Guidelines:
 
 ### 3) Registries (SSOT)
 
-Registries provide stable identifiers and avoid "magic strings" spread across the repo.
+Registries provide stable identifiers and avoid “magic strings” spread across the repo.
 
 - `providers.yaml`: known providers and their supported capabilities
 - `model_profiles.yaml`: business-level profiles mapped to candidate models
@@ -129,7 +129,7 @@ Recommended handling:
 
 ## Implementation guidance (repo-agnostic)
 
-- Put the single calling surface in a shared library/module (or a dedicated "gateway" service) that is easy to audit.
+- Put the single calling surface in a shared library/module (or a dedicated “gateway” service) that is easy to audit.
 - Expose a small API: `generateText()`, `generateStructured()`, `embed()`, etc.
 - Centralize defaults and allowed overrides.
 - Keep provider adapters isolated, ideally with contract tests.

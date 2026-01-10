@@ -67,7 +67,7 @@ Retries MUST be applied centrally and only for safe error classes.
 Recommended default:
 
 - retry on transient network + 5xx
-- bounded attempts (e.g., 1-2)
+- bounded attempts (e.g., 1–2)
 - exponential backoff with jitter
 
 ### Concurrency limits
