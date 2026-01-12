@@ -753,6 +753,22 @@ function writeFileIfMissing(filePath, content, apply) {
   return { op: 'write', path: filePath, mode: 'applied' };
 }
 
+function ensureSkillRetentionTemplate(repoRoot, apply) {
+  const srcPath = path.join(TEMPLATES_DIR, 'skill-retention-table.template.md');
+  const destPath = path.join(repoRoot, 'init', 'skill-retention-table.template.md');
+
+  if (!fs.existsSync(srcPath)) {
+    return { op: 'copy', path: destPath, mode: 'skipped', reason: 'template not found' };
+  }
+  if (fs.existsSync(destPath)) {
+    return { op: 'copy', path: destPath, mode: 'skipped', reason: 'exists' };
+  }
+  if (!apply) return { op: 'copy', path: destPath, mode: 'dry-run' };
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  fs.copyFileSync(srcPath, destPath);
+  return { op: 'copy', path: destPath, mode: 'applied' };
+}
+
 /**
  * Generates a project-specific README.md from the blueprint.
  * Replaces the template README with project information.
@@ -1726,6 +1742,8 @@ function main() {
       console.log('Next: user confirmation that scaffold and enabled capabilities match expectations.');
       console.log('After confirmation, run:');
       console.log(`  node ${self} approve --stage C --repo-root ${repoRoot}`);
+      console.log('Post-init: fill init/skill-retention-table.template.md and confirm deletions before running delete-skills.cjs (dry-run, then --yes).');
+      console.log('Post-init: update root README.md and AGENTS.md if needed.');
       console.log('\nOptional: later run cleanup-init --apply --i-understand to remove the init/ directory');
       process.exit(0);
     }
@@ -2186,6 +2204,13 @@ if (command === 'validate') {
     const syncResult = syncWrappers(repoRoot, providers, true);
     if (syncResult.mode === 'failed') die(`[error] sync-skills.cjs failed with exit code ${syncResult.exitCode}`);
 
+    const retentionTemplateResult = ensureSkillRetentionTemplate(repoRoot, true);
+    if (retentionTemplateResult.mode === 'applied') {
+      console.log('[ok] Skill retention template created: init/skill-retention-table.template.md');
+    } else if (retentionTemplateResult.reason) {
+      console.log(`[info] Skill retention template: ${retentionTemplateResult.reason}`);
+    }
+
     // Auto-update state
 	    const state = loadState(repoRoot);
 	    if (state) {
@@ -2222,11 +2247,12 @@ if (command === 'validate') {
 	        blueprint: path.relative(repoRoot, blueprintPath),
 	        docsRoot: path.relative(repoRoot, docsRoot),
 	        'stage-a': stage_a_res,
-	        contextAddon: contextAddon,
-	        addons: addonResults,
+        contextAddon: contextAddon,
+        addons: addonResults,
         scaffold: scaffoldPlan,
         configs: configResults,
         readme: readmeResult,
+        skillRetentionTemplate: retentionTemplateResult,
         manifest: manifestResult,
         sync: syncResult,
         cleanup: cleanupResult,
@@ -2251,6 +2277,10 @@ if (command === 'validate') {
       }
       if (!stage_a_res.ok) console.log('[warn] Stage A docs check had errors; consider re-running with --require-stage-a.');
       if (stage_a_res.warnings.length > 0) console.log('[warn] Stage A docs check has warnings; ensure TBD/TODO items are tracked.');
+      if (retentionTemplateResult.path) {
+        const status = retentionTemplateResult.mode || retentionTemplateResult.reason || 'unknown';
+        console.log(`- Skill retention template: ${path.relative(repoRoot, retentionTemplateResult.path)} (${status})`);
+      }
       console.log(`- Manifest updated: ${path.relative(repoRoot, manifestResult.path)}`);
       console.log(`- Wrappers synced via: ${syncResult.cmd || '(skipped)'}`);
       if (cleanupResult) console.log(`- init/ cleanup: ${cleanupResult.mode}`);

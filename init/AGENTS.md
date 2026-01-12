@@ -7,6 +7,7 @@ Key principles:
 - Do not skip stages.
 - Do not advance stages without explicit user approval.
 - Do not hand-edit `init/.init-state.json` to change stages; use the pipeline commands.
+- Do not create dev-docs task bundles during initialization; use dev-docs after init completes.
 
 ---
 
@@ -77,6 +78,12 @@ Note: when approving Stage C in an interactive shell, the pipeline will ask whet
 
 ---
 
+## Stage C troubleshooting (EPERM)
+
+If Stage C `apply` fails with an `EPERM` error while writing `.codex/skills/` or `.claude/skills/`, re-run the same `apply` command in an elevated shell. Do not change the blueprint between attempts.
+
+---
+
 ## Add-on notes (context awareness)
 
 If the blueprint enables context awareness (`addons.contextAwareness: true`), `apply` will:
@@ -90,13 +97,33 @@ See `addon-docs/context-awareness.md` for details.
 
 ---
 
-## Post-init: Update Root AGENTS.md
+## Post-init: Skill retention (required)
 
-After Stage C completes, ask the user if they want to update the root `AGENTS.md` with project-specific info.
+After Stage C completes, ensure `init/skill-retention-table.template.md` exists (generated from the template). Fill the table with skills from `.ai/skills/` and translate the Description column if needed. Ask the user which skills to keep/delete (record TBD if undecided).
+
+Confirm deletions **before** running (alias of `delete-skill.cjs`):
+
+```bash
+node .ai/scripts/delete-skills.cjs --dry-run --skills "<csv>"
+```
+
+After confirmation, re-run with `--yes` to delete. Optional removals (like `agent_builder`) should go through this flow.
+
+---
+
+## Post-init: Update Root README.md and AGENTS.md
+
+After Stage C completes and skill retention is confirmed, ask the user if they want to update the root `README.md` and `AGENTS.md` with project-specific info.
 
 ### When to ask
 
-At Stage C completion checkpoint, present option: "update agents" to record tech stack in root AGENTS.md.
+At Stage C completion checkpoint, present option: "update agents" to record tech stack in root AGENTS.md and refresh root README.md.
+
+### README.md update
+
+- If `README.md` was not generated during Stage C, update it at the end alongside `AGENTS.md`.
+- Use `init/project-blueprint.json` as the source of truth.
+- Show a diff and request explicit user approval before writing.
 
 ### What to preserve
 
