@@ -25,7 +25,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 
 ### Stage A (requirements docs)
 
-Run `start` to begin initialization. This automatically creates all templates:
+Run `start` to begin initialization. The command automatically creates all templates:
 
 ```bash
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs start --repo-root .
@@ -107,7 +107,7 @@ Confirm deletions **before** running (alias of `delete-skill.cjs`):
 node .ai/scripts/delete-skills.cjs --dry-run --skills "<csv>"
 ```
 
-After confirmation, re-run with `--yes` to delete. Optional removals (like `agent_builder`) should go through this flow.
+After confirmation, re-run with `--yes` to delete. Optional removals (like `agent_builder`) should go through the same flow.
 
 ---
 
@@ -151,7 +151,7 @@ From `init/project-blueprint.json`:
 ### How to update
 
 1. Read current root `AGENTS.md` and treat the document as a **project doc** (not a template doc).
-2. Replace the template intro paragraph (the one that says this repo is a template) with a 1-2 line project summary.
+2. Replace the template intro paragraph (the one that says the repo is a template) with a 1-2 line project summary.
 3. Update the existing `## Project Type` section body (do NOT add a duplicate section):
    - `{{project.name}} - {{project.description}}` (one line)
 4. Ensure there is exactly one `## Tech Stack` section:

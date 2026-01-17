@@ -5,18 +5,26 @@
 This add-on provides a **stable, verifiable context contract** so an LLM can work with reliable project knowledge:
 
 - API surface (OpenAPI)
-- Database schema mapping (normalized JSON)
+- Database schema contract (normalized JSON)
 - Business processes (BPMN)
 - Additional artifacts registered in a single registry
 
 ## Key invariants (MUST)
 
 - `docs/context/` is the **only** supported entry point for "project context artifacts".
-- `docs/context/registry.json` is the index for all context artifacts.
-- Human collaborators and LLMs MUST use `node .ai/scripts/contextctl.js` to:
-  - register new artifacts
-  - update checksums
-  - verify consistency
+- `docs/context/registry.json` is the canonical index for all context artifacts.
+- Any edits to registered artifacts MUST be followed by:
+  - `node .ai/scripts/contextctl.js touch`
+  - `node .ai/scripts/contextctl.js verify --strict`
+
+### Database schema contract (special rule)
+
+- `docs/context/db/schema.json` is a generated contract.
+- Do NOT hand-edit it.
+- Update it via the SSOT-aware generator:
+  - `node .ai/scripts/dbssotctl.js sync-to-context`
+
+(Then run `contextctl touch` if your workflow does not already do so.)
 
 ## Recommended enforcement
 

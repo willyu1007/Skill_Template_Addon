@@ -99,7 +99,7 @@ When Context Awareness is enabled and `apply` runs successfully, you will typica
 
 ## Standard workflow (run from repo root)
 
-All command paths in this file assume you run from the repo root.
+All command paths in the document assume you run from the repo root.
 
 ### 0) Initialize state
 
@@ -159,7 +159,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
   --providers both
 ```
 
-Stage C `apply` may generate a project-specific root `README.md` from the blueprint via `scripts/templates/README.template.md`. If it is generated, include `README.md` in the Stage C review.
+Stage C `apply` may generate a project-specific root `README.md` from the blueprint via `scripts/templates/README.template.md`. If the file is generated, include `README.md` in the Stage C review.
 
 After the user reviews the changes and explicitly approves, run:
 
@@ -176,7 +176,7 @@ Troubleshooting: if Stage C `apply` fails with `EPERM` when writing `.codex/skil
 After Stage C approval, generate and fill the skill retention table:
 
 1) Ensure `init/skill-retention-table.template.md` exists (copy from the template if needed).
-2) Fill it with current skills from `.ai/skills/` (translate descriptions if needed).
+2) Fill the table with current skills from `.ai/skills/` (translate descriptions if needed).
 3) Ask the user which skills to keep/delete (record TBD if undecided).
 4) Preview deletions, then confirm and delete:
 
@@ -187,7 +187,7 @@ node .ai/scripts/delete-skills.cjs --skills "<csv>" --yes
 
 (`delete-skills.cjs` is an alias of `delete-skill.cjs`.)
 
-Optional removals (like `agent_builder`) should go through this flow.
+Optional removals (like `agent_builder`) should go through the same flow.
 
 ### 5) Post-init: update root README.md and AGENTS.md (recommended)
 
@@ -195,7 +195,7 @@ After Stage C approval, explicitly ask:
 
 > Do you want to record the project type, tech stack, and key directories in the root `AGENTS.md`, and update the root `README.md`? Reply `"update agents"` to proceed, or reply `"done"` to skip.
 
-If user replies `"update agents"`, update the root `AGENTS.md` with project-specific info. Show a diff and request explicit approval before writing. See `## Post-init: Update README.md and AGENTS.md` in this file for rules.
+If user replies `"update agents"`, update the root `AGENTS.md` with project-specific info. Show a diff and request explicit approval before writing. See `## Post-init: Update README.md and AGENTS.md` in the document for rules.
 
 ### 6) Optional: remove the init kit
 
@@ -212,7 +212,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 
 ## Context Awareness add-on notes
 
-### How it is triggered
+### How the workflow is triggered
 
 To trigger add-on installation/init, set:
 - `blueprint.addons.contextAwareness: true`
@@ -319,7 +319,7 @@ For these languages, the LLM should generate configs based on `llm-init-guide.md
 ### Example conversation (short)
 
 ```
-AI: Let's start initializing your project. First, in one sentence: what problem does this project solve?
+AI: Let's start initializing your project. First, in one sentence: what problem does the project solve?
 
 User: An inventory management system for small businesses.
 
@@ -340,7 +340,7 @@ AI: Python has no built-in template here, so I will generate configuration files
 
 ## Post-init: Update README.md and AGENTS.md
 
-If `README.md` was not generated during Stage C, update it alongside `AGENTS.md` at the end of initialization. Use `init/project-blueprint.json` as the source of truth. Show a diff and request explicit approval before writing.
+If `README.md` was not generated during Stage C, update `README.md` alongside `AGENTS.md` at the end of initialization. Use `init/project-blueprint.json` as the source of truth. Show a diff and request explicit approval before writing.
 
 After Stage C completion, if the user chooses to update the root `AGENTS.md`, follow these rules.
 

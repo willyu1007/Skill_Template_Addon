@@ -75,6 +75,12 @@ Ask if `capabilities.database.enabled == true`.
 - Data size expectations (orders of magnitude)
 - Consistency expectations (strong/eventual)
 - Migration strategy expectations (migrations / schema-less / TBD)
+- **DB schema SSOT mode** (MUST choose one):
+  - `none` (no managed SSOT in repo)
+  - `repo-prisma` (SSOT = `prisma/schema.prisma`; developers manage migrations)
+  - `database` (SSOT = real DB; repo keeps mirrors via introspection)
+
+  → Write to Stage B: `db.ssot` and align `addons.dbMirror` accordingly.
 - Backup / restore requirements
 
 Write to:
@@ -140,14 +146,13 @@ Ask if the project needs:
 
 → If YES to any: Enable `addons.contextAwareness: true`
 
-### D2. Database Schema Management (db-mirror)
+### D2. Database Schema Management (SSOT choice + db-mirror)
 
-Ask if:
-- "Does this project need to track and mirror database schema changes?"
-- "Should database migrations be managed programmatically?"
-- "Is there a need for schema introspection and documentation generation?"
+First decide the DB schema SSOT mode (MUST): `none` / `repo-prisma` / `database`.
 
-→ If YES: Enable `addons.dbMirror: true`
+Then:
+- If SSOT is `database`: Enable `addons.dbMirror: true` (repo stores mirrors under `db/`).
+- Otherwise: Keep `addons.dbMirror: false`.
 
 ### D3. Container/Artifact Packaging (packaging)
 

@@ -2,58 +2,27 @@
 
 ## Purpose
 
-This add-on provides a **database schema mirroring** system that allows AI/LLM to understand and work with database structures without direct database access.
+This add-on provides a **repo-local mirror** of the database schema so an LLM can reason about the DB without direct access.
 
-## Key Concepts
+## SSOT rule
 
-### Schema Mirror
+- The **real database** is SSOT.
+- The repo stores snapshots and derived artifacts.
 
-The `db/schema/tables.json` file contains structured definitions of all database tables:
+## Key artifact
 
-```json
-{
-  "tables": [
-    {
-      "name": "users",
-      "columns": [
-        { "name": "id", "type": "uuid", "constraints": ["pk"] },
-        { "name": "email", "type": "string", "constraints": ["unique"] }
-      ]
-    }
-  ]
-}
-```
+- `db/schema/tables.json` - current-state mirror snapshot in `normalized-db-schema-v2` format.
 
-### Migrations
+## Practical workflow
 
-Migrations are stored in `db/migrations/` as timestamped SQL files:
+1. Human runs `prisma db pull` against the target environment.
+2. Import the Prisma schema into the mirror:
+   - `node .ai/scripts/dbctl.js import-prisma`
+3. Sync into LLM context:
+   - `node .ai/scripts/dbssotctl.js sync-to-context`
 
-```
-db/migrations/
-├── 20251225120000_initial_schema.sql
-├── 20251225130000_add_user_roles.sql
-└── ...
-```
+## AI/LLM guidelines
 
-### Environment Configuration
-
-`db/config/db-environments.json` defines database environments and their permissions:
-
-- **dev**: Full access for local development
-- **staging**: Review-required for migrations
-- **prod**: Change-request required for migrations
-
-## AI/LLM Usage
-
-When working with databases, AI should:
-
-1. **Read** the schema mirror to understand current structure
-2. **Propose** changes by modifying schema files
-3. **Generate** migrations using `dbctl generate-migration`
-4. **Document** intentions in `db/workdocs/`
-5. **Never** directly access databases or execute arbitrary SQL
-
-## Commands Reference
-
-See `ADDON.md` for complete command documentation.
-
+- Do NOT hand-edit `db/schema/tables.json`.
+- Draft desired changes as workdocs under `db/workdocs/`.
+- Humans execute DDL and migrations.

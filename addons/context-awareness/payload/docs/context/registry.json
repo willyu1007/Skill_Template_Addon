@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2025-12-25T14:14:14Z",
+  "updatedAt": "2026-01-16T23:27:36.435Z",
   "artifacts": [
     {
       "id": "api-openapi",
@@ -23,15 +23,15 @@
       "type": "db-schema",
       "path": "docs/context/db/schema.json",
       "mode": "contract",
-      "format": "normalized-db-schema-v1",
+      "format": "normalized-db-schema-v2",
       "tags": [
         "db"
       ],
-      "checksumSha256": "1bf87ead7dfdb1d5d3b9a2bbfd61731924a2127a511345dc42603a0056f0cb7e",
-      "lastUpdated": "2025-12-25T14:14:14Z",
+      "checksumSha256": "a30eb6af3d0a1587408a849baa4f4ff6266c6a9b1d1eb75e6fa43a27ac48fc6e",
+      "lastUpdated": "2026-01-16T23:27:36.431Z",
       "source": {
-        "kind": "manual",
-        "notes": "Keep this mapping consistent with migrations/ORM; then run contextctl touch."
+        "kind": "generated",
+        "notes": "Generated via: node .ai/scripts/dbssotctl.js sync-to-context (then contextctl touch). Do NOT hand-edit."
       }
     },
     {

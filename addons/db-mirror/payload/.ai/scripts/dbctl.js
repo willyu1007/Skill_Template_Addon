@@ -2,27 +2,33 @@
 /**
  * dbctl.js
  *
- * Database schema mirror management for the db-mirror add-on.
- * The real database is the source of truth; this manages structured mirrors.
+ * Database mirror controller.
  *
- * Commands:
- *   init              Initialize db/ directory skeleton (idempotent)
- *   add-table         Add a table to the schema mirror
- *   remove-table      Remove a table from the schema mirror
- *   list-tables       List tables in the schema
- *   verify            Verify schema mirror consistency
- *   generate-migration  Generate a new migration file
- *   sync-to-context   Sync schema to docs/context/ (if context-awareness enabled)
- *   help              Show help
+ * In this template, the **real database** is the SSOT when this add-on is enabled.
+ * The repository stores a structured mirror under db/ so an LLM can reason
+ * about the schema without DB access.
+ *
+ * Core invariant:
+ * - db/schema/tables.json is a mirror snapshot (NOT a hand-edited SSOT).
+ *
+ * Typical flow (human + LLM):
+ * 1) Human runs: prisma db pull ...  (updates prisma/schema.prisma)
+ * 2) LLM/human runs: node .ai/scripts/dbctl.js import-prisma
+ * 3) LLM/human runs: node .ai/scripts/dbctl.js sync-to-context
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-// ============================================================================
-// CLI Argument Parsing
-// ============================================================================
+import {
+  readTextIfExists,
+  readJsonIfExists,
+  writeJson,
+  parsePrismaSchema,
+  buildNormalizedDbSchema,
+  normalizeDbMirrorSchema
+} from './lib/normalized-db-schema.js';
 
 function usage(exitCode = 0) {
   const msg = `
@@ -35,45 +41,36 @@ Commands:
 
   init
     --repo-root <path>          Repo root (default: cwd)
-    --dry-run                   Show what would be created without writing
-    Initialize db/ directory skeleton (idempotent).
+    Create db/ skeleton (idempotent).
 
-  add-table
-    --name <string>             Table name (required)
-    --columns <string>          Column definitions: "name:type[:constraint],..." (required)
+  import-prisma
     --repo-root <path>          Repo root (default: cwd)
-    Add a table to the schema mirror.
-
-  remove-table
-    --name <string>             Table name (required)
-    --repo-root <path>          Repo root (default: cwd)
-    Remove a table from the schema mirror.
+    --schema <path>             Prisma schema path (default: prisma/schema.prisma)
+    --out <path>                Output mirror path (default: db/schema/tables.json)
+    Import prisma/schema.prisma into db/schema/tables.json (normalized-db-schema-v2).
 
   list-tables
     --repo-root <path>          Repo root (default: cwd)
     --format <text|json>        Output format (default: text)
-    List tables in the schema.
+    List tables in db/schema/tables.json.
 
   verify
     --repo-root <path>          Repo root (default: cwd)
-    --env <string>              Environment to verify against (optional)
-    Verify schema mirror consistency.
-
-  generate-migration
-    --name <string>             Migration name (required)
-    --repo-root <path>          Repo root (default: cwd)
-    Generate a new migration file.
+    --strict                    Fail if the mirror is missing or malformed
+    Verify the mirror file is parseable.
 
   sync-to-context
     --repo-root <path>          Repo root (default: cwd)
-    Sync schema to docs/context/db/ (requires context-awareness).
+    Regenerate docs/context/db/schema.json via dbssotctl (best effort).
 
-Examples:
-  node .ai/scripts/dbctl.js init
-  node .ai/scripts/dbctl.js add-table --name users --columns "id:uuid:pk,email:string:unique,created_at:timestamp"
-  node .ai/scripts/dbctl.js list-tables
-  node .ai/scripts/dbctl.js generate-migration --name add-user-roles
-  node .ai/scripts/dbctl.js verify --env dev
+  generate-migration
+    --repo-root <path>          Repo root (default: cwd)
+    --name <migration-name>     Required
+    Create an empty SQL migration file under db/migrations/.
+
+Notes:
+- This add-on does NOT connect to databases.
+- Humans own credentials and execute real migrations.
 `;
   console.log(msg.trim());
   process.exit(exitCode);
@@ -90,7 +87,6 @@ function parseArgs(argv) {
 
   const command = args.shift();
   const opts = {};
-  const positionals = [];
 
   while (args.length > 0) {
     const token = args.shift();
@@ -103,556 +99,225 @@ function parseArgs(argv) {
       } else {
         opts[key] = true;
       }
-    } else {
-      positionals.push(token);
     }
   }
 
-  return { command, opts, positionals };
+  return { command, opts };
 }
 
-// ============================================================================
-// File Utilities
-// ============================================================================
-
-function readJson(filePath) {
-  try {
-    const raw = fs.readFileSync(filePath, 'utf8');
-    return JSON.parse(raw);
-  } catch (e) {
-    return null;
-  }
+function toPosix(p) {
+  return String(p).replace(/\\/g, '/');
 }
 
-function writeJson(filePath, data) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', 'utf8');
+function ensureDir(p) {
+  fs.mkdirSync(p, { recursive: true });
 }
 
-function ensureDir(dirPath) {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-    return { op: 'mkdir', path: dirPath };
-  }
-  return { op: 'skip', path: dirPath, reason: 'exists' };
+function nowStamp() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return (
+    d.getUTCFullYear() +
+    pad(d.getUTCMonth() + 1) +
+    pad(d.getUTCDate()) +
+    pad(d.getUTCHours()) +
+    pad(d.getUTCMinutes()) +
+    pad(d.getUTCSeconds())
+  );
 }
 
-function writeFileIfMissing(filePath, content) {
-  if (fs.existsSync(filePath)) {
-    return { op: 'skip', path: filePath, reason: 'exists' };
-  }
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, content, 'utf8');
-  return { op: 'write', path: filePath };
-}
-
-// ============================================================================
-// Database Schema Management
-// ============================================================================
-
-function getDbDir(repoRoot) {
-  return path.join(repoRoot, 'db');
-}
-
-function getSchemaPath(repoRoot) {
-  return path.join(getDbDir(repoRoot), 'schema', 'tables.json');
-}
-
-function getEnvConfigPath(repoRoot) {
-  return path.join(getDbDir(repoRoot), 'config', 'db-environments.json');
-}
-
-function getMigrationsDir(repoRoot) {
-  return path.join(getDbDir(repoRoot), 'migrations');
-}
-
-function normalizeSchema(raw) {
-  const now = new Date().toISOString();
-  const schema = raw && typeof raw === 'object' ? raw : {};
+function repoPaths(repoRoot) {
   return {
-    version: 1,
-    updatedAt: schema.updatedAt || schema.lastUpdated || now,
-    tables: Array.isArray(schema.tables) ? schema.tables : []
+    dbRoot: path.join(repoRoot, 'db'),
+    mirrorPath: path.join(repoRoot, 'db', 'schema', 'tables.json'),
+    migrationsDir: path.join(repoRoot, 'db', 'migrations'),
+    envsPath: path.join(repoRoot, 'db', 'config', 'db-environments.json'),
+    workdocsDir: path.join(repoRoot, 'db', 'workdocs')
   };
 }
 
-function normalizeEnvConfig(raw) {
-  const now = new Date().toISOString();
-  const cfg = raw && typeof raw === 'object' ? raw : {};
-  return {
-    version: 1,
-    updatedAt: cfg.updatedAt || cfg.lastUpdated || now,
-    environments: Array.isArray(cfg.environments) ? cfg.environments : []
-  };
-}
+function cmdInit(repoRoot) {
+  const p = repoPaths(repoRoot);
 
-function loadSchema(repoRoot) {
-  const schemaPath = getSchemaPath(repoRoot);
-  const data = readJson(schemaPath);
-  return normalizeSchema(data);
-}
+  ensureDir(path.join(p.dbRoot, 'schema'));
+  ensureDir(path.join(p.dbRoot, 'config'));
+  ensureDir(p.migrationsDir);
+  ensureDir(path.join(p.dbRoot, 'samples'));
+  ensureDir(p.workdocsDir);
 
-function saveSchema(repoRoot, schema) {
-  const normalized = normalizeSchema(schema);
-  normalized.updatedAt = new Date().toISOString();
-  writeJson(getSchemaPath(repoRoot), normalized);
-}
-
-function loadEnvConfig(repoRoot) {
-  const configPath = getEnvConfigPath(repoRoot);
-  const data = readJson(configPath);
-  return normalizeEnvConfig(data);
-}
-
-function saveEnvConfig(repoRoot, cfg) {
-  const normalized = normalizeEnvConfig(cfg);
-  normalized.updatedAt = new Date().toISOString();
-  writeJson(getEnvConfigPath(repoRoot), normalized);
-}
-
-function parseColumnDef(colDef) {
-  const parts = colDef.split(':');
-  if (parts.length < 2) {
-    return null;
-  }
-  return {
-    name: parts[0],
-    type: parts[1],
-    constraints: parts.slice(2)
-  };
-}
-
-// ============================================================================
-// Commands
-// ============================================================================
-
-function cmdInit(repoRoot, dryRun) {
-  const dbDir = getDbDir(repoRoot);
-  const actions = [];
-
-  // Create directory structure
-  const dirs = [
-    dbDir,
-    path.join(dbDir, 'schema'),
-    path.join(dbDir, 'migrations'),
-    path.join(dbDir, 'config'),
-    path.join(dbDir, 'samples'),
-    path.join(dbDir, 'workdocs')
-  ];
-
-  for (const dir of dirs) {
-    if (dryRun) {
-      actions.push({ op: 'mkdir', path: dir, mode: 'dry-run' });
-    } else {
-      actions.push(ensureDir(dir));
-    }
+  // Skeleton mirror file (v2)
+  if (!fs.existsSync(p.mirrorPath)) {
+    const mirror = buildNormalizedDbSchema({
+      mode: 'database',
+      source: { kind: 'database', path: '' },
+      database: { kind: 'relational', dialect: 'generic', name: '', schemas: [] },
+      enums: [],
+      tables: [],
+      notes: 'DB mirror skeleton. Populate via: node .ai/scripts/dbctl.js import-prisma'
+    });
+    writeJson(p.mirrorPath, mirror);
   }
 
-  // Create AGENTS.md
-  const agentsPath = path.join(dbDir, 'AGENTS.md');
-  const agentsContent = `# Database Mirror (LLM-first)
-
-## Conclusions (read first)
-
-- Real databases are the **source of truth**; this directory holds structured mirrors.
-- AI/LLM uses these mirrors to understand schema and propose changes.
-- All database operations go through scripts - no direct database manipulation.
-
-## Directory Structure
-
-| Path | Purpose |
-|------|---------|
-| \`schema/tables.json\` | Table structure definitions |
-| \`migrations/\` | Migration files (timestamped) |
-| \`config/\` | Environment-specific DB config |
-| \`samples/\` | Sample/seed data |
-| \`workdocs/\` | Design decisions and plans |
-
-## Commands
-
-\`\`\`bash
-# Add a table
-node .ai/scripts/dbctl.js add-table --name users --columns "id:uuid:pk,email:string:unique"
-
-# List tables
-node .ai/scripts/dbctl.js list-tables
-
-# Generate migration
-node .ai/scripts/dbctl.js generate-migration --name add-user-roles
-
-# Verify schema
-node .ai/scripts/dbctl.js verify
-\`\`\`
-
-## AI/LLM Guidelines
-
-1. **Read** \`schema/tables.json\` to understand current schema
-2. **Propose** schema changes by editing mirror files
-3. **Generate** migrations via \`dbctl generate-migration\`
-4. **Document** intentions in \`workdocs/\`
-5. **Never** directly connect to databases or run arbitrary SQL
-
-Humans execute migrations and handle credentials.
-`;
-
-  if (dryRun) {
-    actions.push({ op: 'write', path: agentsPath, mode: 'dry-run' });
-  } else {
-    actions.push(writeFileIfMissing(agentsPath, agentsContent));
-  }
-
-  // Create tables.json
-  const schemaPath = getSchemaPath(repoRoot);
-  if (!fs.existsSync(schemaPath) && !dryRun) {
-    const schema = {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      tables: []
-    };
-    writeJson(schemaPath, schema);
-    actions.push({ op: 'write', path: schemaPath });
-  } else if (dryRun) {
-    actions.push({ op: 'write', path: schemaPath, mode: 'dry-run' });
-  } else {
-    actions.push({ op: 'skip', path: schemaPath, reason: 'exists' });
-  }
-
-  // Create db-environments.json
-  const envConfigPath = getEnvConfigPath(repoRoot);
-  if (!fs.existsSync(envConfigPath) && !dryRun) {
-    const envConfig = {
-      version: 1,
-      updatedAt: new Date().toISOString(),
+  // Environment configuration
+  if (!fs.existsSync(p.envsPath)) {
+    writeJson(p.envsPath, {
       environments: [
         {
           id: 'dev',
           description: 'Local development',
           connectionTemplate: 'postgresql://${DB_USER}:${DB_PASSWORD}@localhost:5432/${DB_NAME}',
-          permissions: {
-            migrations: true,
-            seedData: true,
-            directQueries: true
-          }
+          permissions: { migrations: true, seedData: true, directQueries: true }
         },
         {
           id: 'staging',
           description: 'Staging environment',
-          connectionTemplate: 'postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}',
-          permissions: {
-            migrations: 'review-required',
-            seedData: false,
-            directQueries: false
-          }
+          connectionTemplate: 'postgresql://${DB_USER}:${DB_PASSWORD}@staging-host:5432/${DB_NAME}',
+          permissions: { migrations: true, seedData: false, directQueries: false }
         },
         {
           id: 'prod',
           description: 'Production environment',
-          connectionTemplate: 'postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}',
-          permissions: {
-            migrations: 'change-request',
-            seedData: false,
-            directQueries: false
-          }
+          connectionTemplate: 'postgresql://${DB_USER}:${DB_PASSWORD}@prod-host:5432/${DB_NAME}',
+          permissions: { migrations: false, seedData: false, directQueries: false }
         }
       ]
-    };
-    saveEnvConfig(repoRoot, envConfig);
-    actions.push({ op: 'write', path: envConfigPath });
-  } else if (dryRun) {
-    actions.push({ op: 'write', path: envConfigPath, mode: 'dry-run' });
-  } else {
-    actions.push({ op: 'skip', path: envConfigPath, reason: 'exists' });
+    });
   }
 
-  // Create workdocs README
-  const workdocsReadmePath = path.join(dbDir, 'workdocs', 'README.md');
-  const workdocsContent = `# Database Workdocs
-
-Use this directory for:
-- Schema design decisions
-- Migration planning
-- Data modeling discussions
-- Change history and rationale
-`;
-
-  if (dryRun) {
-    actions.push({ op: 'write', path: workdocsReadmePath, mode: 'dry-run' });
-  } else {
-    actions.push(writeFileIfMissing(workdocsReadmePath, workdocsContent));
+  // Workdocs README
+  const workdocsReadme = path.join(p.workdocsDir, 'README.md');
+  if (!fs.existsSync(workdocsReadme)) {
+    fs.writeFileSync(
+      workdocsReadme,
+      `# DB workdocs\n\nUse this folder for:\n- DB change proposals (desired-state)\n- Migration plans and risk notes\n- Rollout and verification checklists\n\nSSOT note:\n- The real database is SSOT.\n- Keep db/schema/tables.json as a mirror snapshot (generated).\n`,
+      'utf8'
+    );
   }
 
-  console.log('[ok] Database mirror initialized.');
-  for (const action of actions) {
-    const mode = action.mode ? ` (${action.mode})` : '';
-    const reason = action.reason ? ` [${action.reason}]` : '';
-    console.log(`  ${action.op}: ${path.relative(repoRoot, action.path)}${mode}${reason}`);
-  }
+  console.log('[ok] db-mirror initialized.');
+  console.log(`  - Mirror: ${toPosix(path.relative(repoRoot, p.mirrorPath))}`);
 }
 
-function cmdAddTable(repoRoot, name, columnsStr) {
-  if (!name) die('[error] --name is required');
-  if (!columnsStr) die('[error] --columns is required');
+function cmdImportPrisma(repoRoot, schemaPathOpt, outPathOpt) {
+  const schemaPath = path.resolve(repoRoot, schemaPathOpt || path.join('prisma', 'schema.prisma'));
+  const outPath = path.resolve(repoRoot, outPathOpt || path.join('db', 'schema', 'tables.json'));
 
-  const schema = loadSchema(repoRoot);
-
-  // Check if table exists
-  if (schema.tables.find(t => t.name === name)) {
-    die(`[error] Table "${name}" already exists. Use remove-table first.`);
+  const prismaText = readTextIfExists(schemaPath);
+  if (!prismaText) {
+    die(`[error] Prisma schema not found: ${toPosix(path.relative(repoRoot, schemaPath))}`);
   }
 
-  // Parse columns
-  const columnDefs = columnsStr.split(',').map(c => c.trim());
-  const columns = [];
-  for (const colDef of columnDefs) {
-    const col = parseColumnDef(colDef);
-    if (!col) {
-      die(`[error] Invalid column definition: ${colDef}. Format: name:type[:constraint,...]`);
-    }
-    columns.push(col);
-  }
+  const parsed = parsePrismaSchema(prismaText);
 
-  schema.tables.push({
-    name,
-    columns,
-    createdAt: new Date().toISOString()
+  const mirror = buildNormalizedDbSchema({
+    mode: 'database',
+    source: { kind: 'prisma-schema', path: toPosix(path.relative(repoRoot, schemaPath)) },
+    database: parsed.database,
+    enums: parsed.enums,
+    tables: parsed.tables,
+    notes: 'Mirror of real DB shape (imported via prisma/schema.prisma).'
   });
 
-  saveSchema(repoRoot, schema);
-  console.log(`[ok] Added table: ${name} (${columns.length} columns)`);
-  for (const col of columns) {
-    const constraints = col.constraints.length > 0 ? ` [${col.constraints.join(', ')}]` : '';
-    console.log(`  - ${col.name}: ${col.type}${constraints}`);
-  }
-}
+  ensureDir(path.dirname(outPath));
+  writeJson(outPath, mirror);
 
-function cmdRemoveTable(repoRoot, name) {
-  if (!name) die('[error] --name is required');
-
-  const schema = loadSchema(repoRoot);
-  const index = schema.tables.findIndex(t => t.name === name);
-
-  if (index === -1) {
-    die(`[error] Table "${name}" not found.`);
-  }
-
-  schema.tables.splice(index, 1);
-  saveSchema(repoRoot, schema);
-  console.log(`[ok] Removed table: ${name}`);
+  console.log('[ok] Imported Prisma schema into DB mirror.');
+  console.log(`  - From: ${toPosix(path.relative(repoRoot, schemaPath))}`);
+  console.log(`  - To:   ${toPosix(path.relative(repoRoot, outPath))}`);
 }
 
 function cmdListTables(repoRoot, format) {
-  const schema = loadSchema(repoRoot);
+  const p = repoPaths(repoRoot);
+  const raw = readJsonIfExists(p.mirrorPath);
+  if (!raw) die(`[error] Mirror not found: ${toPosix(path.relative(repoRoot, p.mirrorPath))}`);
+
+  const normalized = normalizeDbMirrorSchema(raw);
+  const tables = normalized.tables || [];
 
   if (format === 'json') {
-    console.log(JSON.stringify(schema, null, 2));
+    console.log(JSON.stringify({ count: tables.length, tables }, null, 2));
     return;
   }
 
-  console.log(`Database Schema (${schema.tables.length} tables):`);
-  console.log(`Updated at: ${schema.updatedAt || 'unknown'}\n`);
-
-  if (schema.tables.length === 0) {
-    console.log('  (no tables defined)');
-    return;
-  }
-
-  for (const table of schema.tables) {
-    console.log(`  [${table.name}]`);
-    for (const col of table.columns || []) {
-      const constraints = col.constraints?.length > 0 ? ` [${col.constraints.join(', ')}]` : '';
-      console.log(`    - ${col.name}: ${col.type}${constraints}`);
-    }
-    console.log('');
+  console.log(`Tables (${tables.length})`);
+  for (const t of tables) {
+    const cols = Array.isArray(t.columns) ? t.columns.length : 0;
+    console.log(`- ${t.name}${t.dbName ? ` (db: ${t.dbName})` : ''} [columns: ${cols}]`);
   }
 }
 
-function cmdVerify(repoRoot, env) {
-  const errors = [];
-  const warnings = [];
-  const dbDir = getDbDir(repoRoot);
-
-  // Check db directory exists
-  if (!fs.existsSync(dbDir)) {
-    errors.push('db/ directory does not exist. Run: dbctl init');
+function cmdVerify(repoRoot, strict) {
+  const p = repoPaths(repoRoot);
+  const raw = readJsonIfExists(p.mirrorPath);
+  if (!raw) {
+    if (strict) die(`[error] Mirror missing: ${toPosix(path.relative(repoRoot, p.mirrorPath))}`);
+    console.warn(`[warn] Mirror missing: ${toPosix(path.relative(repoRoot, p.mirrorPath))}`);
+    return;
   }
 
-  // Check schema exists
-  const schemaPath = getSchemaPath(repoRoot);
-  if (!fs.existsSync(schemaPath)) {
-    errors.push('schema/tables.json does not exist. Run: dbctl init');
-  } else {
-    const schema = loadSchema(repoRoot);
+  const normalized = normalizeDbMirrorSchema(raw);
+  const ok = normalized.version === 2 && Array.isArray(normalized.tables);
 
-    // Verify tables have valid structure
-    for (const table of schema.tables) {
-      if (!table.name) {
-        errors.push('Found table without name');
-      }
-      if (!table.columns || table.columns.length === 0) {
-        warnings.push(`Table "${table.name}" has no columns defined`);
-      }
-    }
+  if (!ok && strict) die('[error] Mirror file is not a valid normalized-db-schema-v2.');
+
+  console.log(`[ok] Mirror looks parseable (version=${normalized.version}, tables=${normalized.tables.length}).`);
+}
+
+function cmdSyncToContext(repoRoot) {
+  const dbssotctl = path.join(repoRoot, '.ai', 'scripts', 'dbssotctl.js');
+  if (!fs.existsSync(dbssotctl)) {
+    console.warn('[warn] dbssotctl.js not found; cannot sync docs/context.');
+    return;
   }
 
-  // Check environment config if env specified
-  if (env) {
-    const envConfig = loadEnvConfig(repoRoot);
-    const envEntry = envConfig.environments?.find(e => e.id === env);
-    if (!envEntry) {
-      errors.push(`Environment "${env}" not found in db-environments.json`);
-    }
-  }
+  const res = spawnSync('node', [dbssotctl, 'sync-to-context', '--repo-root', repoRoot], {
+    cwd: repoRoot,
+    stdio: 'inherit'
+  });
 
-  // Check migrations directory
-  const migrationsDir = getMigrationsDir(repoRoot);
-  if (!fs.existsSync(migrationsDir)) {
-    warnings.push('migrations/ directory does not exist');
-  }
-
-  // Report results
-  if (errors.length > 0) {
-    console.log('\nErrors:');
-    for (const e of errors) console.log(`  - ${e}`);
-  }
-
-  if (warnings.length > 0) {
-    console.log('\nWarnings:');
-    for (const w of warnings) console.log(`  - ${w}`);
-  }
-
-  const ok = errors.length === 0;
-  if (ok) {
-    console.log('[ok] Database schema verification passed.');
-  } else {
-    console.log('[error] Database schema verification failed.');
-    process.exit(1);
+  if (res.status !== 0) {
+    die(`[error] dbssotctl sync-to-context failed (exit ${res.status}).`);
   }
 }
 
 function cmdGenerateMigration(repoRoot, name) {
   if (!name) die('[error] --name is required');
+  const p = repoPaths(repoRoot);
+  ensureDir(p.migrationsDir);
 
-  const migrationsDir = getMigrationsDir(repoRoot);
-  ensureDir(migrationsDir);
+  const slug = String(name)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
 
-  // Generate timestamp-based filename
-  const timestamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
-  const safeName = name.replace(/[^a-z0-9-_]/gi, '-').toLowerCase();
-  const filename = `${timestamp}_${safeName}.sql`;
-  const filePath = path.join(migrationsDir, filename);
+  const file = `${nowStamp()}_${slug || 'migration'}.sql`;
+  const dest = path.join(p.migrationsDir, file);
 
-  const content = `-- Migration: ${name}
--- Generated: ${new Date().toISOString()}
--- 
--- Instructions:
--- 1. Fill in the UP migration below
--- 2. Add DOWN migration for rollback
--- 3. Test in dev environment first
--- 4. Have a human execute in staging/prod
+  if (fs.existsSync(dest)) die(`[error] Migration already exists: ${file}`);
 
--- ============================================================================
--- UP Migration
--- ============================================================================
+  const header = `-- Migration: ${file}\n-- Created: ${new Date().toISOString()}\n-- Notes: This repo treats the real DB as SSOT. Humans apply SQL.\n\n`;
+  fs.writeFileSync(dest, header, 'utf8');
 
--- TODO: Add your schema changes here
-
--- ============================================================================
--- DOWN Migration (Rollback)
--- ============================================================================
-
--- TODO: Add rollback statements here
-`;
-
-  fs.writeFileSync(filePath, content, 'utf8');
-  console.log(`[ok] Generated migration: ${filename}`);
-  console.log(`     Path: ${path.relative(repoRoot, filePath)}`);
+  console.log('[ok] Migration created:');
+  console.log(`  - ${toPosix(path.relative(repoRoot, dest))}`);
 }
-
-function cmdSyncToContext(repoRoot) {
-  const contextDbPath = path.join(repoRoot, 'docs', 'context', 'db', 'schema.json');
-  const contextDir = path.dirname(contextDbPath);
-
-  // Check if context-awareness is installed
-  if (!fs.existsSync(path.join(repoRoot, 'docs', 'context'))) {
-    die('[error] Context layer not found. Install context-awareness add-on first.');
-  }
-
-  // Load schema
-  const schema = loadSchema(repoRoot);
-
-  // Ensure context db directory exists
-  ensureDir(contextDir);
-
-  // Preserve existing database metadata if present.
-  const existing = readJson(contextDbPath) || {};
-  const database = (existing.database && typeof existing.database === 'object')
-    ? existing.database
-    : { kind: 'relational', dialect: 'generic', name: '' };
-
-  // Write normalized context schema (contract-friendly)
-  writeJson(contextDbPath, {
-    version: 1,
-    database,
-    tables: schema.tables,
-    notes: `Synced from db/schema/tables.json by dbctl sync-to-context at ${new Date().toISOString()}`
-  });
-
-  console.log(`[ok] Synced schema to ${path.relative(repoRoot, contextDbPath)}`);
-
-  // Best-effort: update registry checksums if contextctl is available.
-  const contextctlPath = path.join(repoRoot, '.ai', 'scripts', 'contextctl.js');
-  if (fs.existsSync(contextctlPath)) {
-    try {
-      const res = spawnSync('node', [contextctlPath, 'touch', '--repo-root', repoRoot], { stdio: 'inherit' });
-      if (res.status !== 0) {
-        console.log('     [warn] contextctl touch failed; run it manually to refresh registry checksums.');
-      }
-    } catch {
-      console.log('     [warn] Could not run contextctl touch; run it manually to refresh registry checksums.');
-    }
-  } else {
-    console.log('     Run: node .ai/scripts/contextctl.js touch  (to update registry checksums)');
-  }
-}
-
-// ============================================================================
-// Main
-// ============================================================================
 
 function main() {
   const { command, opts } = parseArgs(process.argv);
   const repoRoot = path.resolve(opts['repo-root'] || process.cwd());
-  const format = (opts['format'] || 'text').toLowerCase();
+  const format = String(opts['format'] || 'text').toLowerCase();
+  const strict = !!opts['strict'];
 
-  switch (command) {
-    case 'help':
-      usage(0);
-      break;
-    case 'init':
-      cmdInit(repoRoot, !!opts['dry-run']);
-      break;
-    case 'add-table':
-      cmdAddTable(repoRoot, opts['name'], opts['columns']);
-      break;
-    case 'remove-table':
-      cmdRemoveTable(repoRoot, opts['name']);
-      break;
-    case 'list-tables':
-      cmdListTables(repoRoot, format);
-      break;
-    case 'verify':
-      cmdVerify(repoRoot, opts['env']);
-      break;
-    case 'generate-migration':
-      cmdGenerateMigration(repoRoot, opts['name']);
-      break;
-    case 'sync-to-context':
-      cmdSyncToContext(repoRoot);
-      break;
-    default:
-      console.error(`[error] Unknown command: ${command}`);
-      usage(1);
-  }
+  if (command === 'help') return usage(0);
+  if (command === 'init') return cmdInit(repoRoot);
+  if (command === 'import-prisma') return cmdImportPrisma(repoRoot, opts['schema'], opts['out']);
+  if (command === 'list-tables') return cmdListTables(repoRoot, format);
+  if (command === 'verify') return cmdVerify(repoRoot, strict);
+  if (command === 'sync-to-context') return cmdSyncToContext(repoRoot);
+  if (command === 'generate-migration') return cmdGenerateMigration(repoRoot, opts['name']);
+
+  usage(1);
 }
 
 main();

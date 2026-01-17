@@ -14,7 +14,7 @@
 Typical artifacts (not exhaustive):
 
 - API contract: `docs/context/api/openapi.yaml`
-- Database schema mapping: `docs/context/db/schema.json`
+- Database schema contract: `docs/context/db/schema.json`
 - Business processes: `docs/context/process/*.bpmn`
 
 All artifacts MUST be registered in `docs/context/registry.json`.
@@ -24,6 +24,27 @@ All artifacts MUST be registered in `docs/context/registry.json`.
 1. Open `docs/context/registry.json`.
 2. Select only the artifacts needed for the current task.
 3. Open those files by path (do not scan folders).
+
+## Database schema contract
+
+- The DB schema contract is: `docs/context/db/schema.json`.
+- Format: `normalized-db-schema-v2` (LLM-optimized; tool-agnostic).
+- Do NOT hand-edit the contract.
+
+### How the contract is generated
+
+The generator is SSOT-aware:
+
+- Project DB SSOT configuration: `docs/project/db-ssot.json`
+- Generator script: `node .ai/scripts/dbssotctl.js sync-to-context`
+
+The generator chooses the source based on SSOT mode:
+
+- `repo-prisma`: reads `prisma/schema.prisma` (SSOT) and emits the contract.
+- `database`: reads `db/schema/tables.json` (mirror of real DB) and emits the contract.
+- `none`: emits an empty contract.
+
+After generation, `dbssotctl` runs `contextctl touch` (best effort) to keep checksums consistent.
 
 ## How to update context (script-only)
 
@@ -42,4 +63,3 @@ Use `node .ai/scripts/contextctl.js`:
 
 - Registry and artifacts are consistent:
   - `node .ai/scripts/contextctl.js verify --strict`
-

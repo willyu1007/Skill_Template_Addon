@@ -6,7 +6,8 @@
   "required": [
     "version",
     "project",
-    "repo"
+    "repo",
+    "db"
   ],
   "properties": {
     "version": {
@@ -325,7 +326,7 @@
     },
     "db": {
       "type": "object",
-      "description": "Database configuration (effective when db-mirror add-on is enabled).",
+      "description": "Database configuration. Always include db.enabled and db.ssot; other fields apply depending on ssot (none/repo-prisma/database).",
       "properties": {
         "enabled": {
           "type": "boolean"
@@ -351,9 +352,22 @@
         "migrationTool": {
           "type": "string",
           "description": "Migration tool preference (e.g., prisma, knex, flyway)."
+        },
+        "ssot": {
+          "type": "string",
+          "enum": [
+            "none",
+            "repo-prisma",
+            "database"
+          ],
+          "description": "Database schema SSOT mode. none: unmanaged; repo-prisma: prisma/schema.prisma; database: real DB with repo mirrors."
         }
       },
-      "additionalProperties": true
+      "additionalProperties": true,
+      "required": [
+        "ssot",
+        "enabled"
+      ]
     },
     "ci": {
       "type": "object",

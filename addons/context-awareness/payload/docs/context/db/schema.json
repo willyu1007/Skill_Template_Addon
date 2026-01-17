@@ -1,10 +1,20 @@
 {
-  "version": 1,
+  "version": 2,
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "ssot": {
+    "mode": "none",
+    "source": {
+      "kind": "none",
+      "path": ""
+    }
+  },
   "database": {
     "kind": "relational",
     "dialect": "generic",
-    "name": ""
+    "name": "",
+    "schemas": []
   },
+  "enums": [],
   "tables": [],
-  "notes": "This file is a normalized, tool-agnostic mapping of the database schema for LLM consumption. Keep it updated via `node .ai/scripts/contextctl.js`."
+  "notes": "LLM contract file (normalized-db-schema-v2). Do NOT hand-edit. Update via: node .ai/scripts/dbssotctl.js sync-to-context"
 }

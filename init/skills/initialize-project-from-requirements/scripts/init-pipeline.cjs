@@ -539,6 +539,32 @@ function validateBlueprint(blueprint) {
   if (caps.api && caps.api.style && typeof caps.api.style !== 'string') warnings.push('capabilities.api.style should be a string.');
   if (caps.bpmn && typeof caps.bpmn.enabled !== 'boolean') warnings.push('capabilities.bpmn.enabled should be boolean when present.');
 
+
+
+  // DB SSOT mode checks (mutually exclusive DB schema workflows)
+  const db = blueprint.db || {};
+  const validSsot = ['none', 'repo-prisma', 'database'];
+  if (typeof db.enabled !== 'boolean') {
+    errors.push('db.enabled is required (boolean).');
+  }
+  if (!db.ssot || typeof db.ssot !== 'string' || !validSsot.includes(db.ssot)) {
+    errors.push(`db.ssot is required and must be one of: ${validSsot.join(', ')}`);
+  }
+
+  const dbMirrorEnabled = isDbMirrorEnabled(blueprint);
+  if (db.ssot === 'database' && !dbMirrorEnabled) {
+    errors.push('db.ssot=database requires addons.dbMirror=true (db-mirror add-on).');
+  }
+  if (db.ssot !== 'database' && dbMirrorEnabled) {
+    errors.push('addons.dbMirror=true is only valid when db.ssot=database.');
+  }
+
+  if ((caps.database && caps.database.enabled) && db.ssot === 'none') {
+    warnings.push('capabilities.database.enabled=true but db.ssot=none. The template will not manage schema synchronization.');
+  }
+  if ((!caps.database || !caps.database.enabled) && db.ssot !== 'none') {
+    warnings.push('db.ssot is not none, but capabilities.database.enabled is false. Ensure this is intentional.');
+  }
   const skills = blueprint.skills || {};
   if (skills.packs && !Array.isArray(skills.packs)) errors.push('skills.packs must be an array of strings when present.');
 
@@ -595,8 +621,9 @@ function recommendedAddonsFromBlueprint(blueprint) {
     (caps.bpmn && caps.bpmn.enabled);
   if (needsContext) rec.push('context-awareness');
 
-  // db-mirror: enabled when database is enabled
-  if (caps.database && caps.database.enabled) rec.push('db-mirror');
+  // db-mirror: enabled only when DB SSOT is the real database
+  const db = blueprint.db || {};
+  if (db.ssot === 'database') rec.push('db-mirror');
 
   // packaging: enabled when containerization/packaging is configured
   const packagingEnabled =
@@ -1022,6 +1049,220 @@ function getContextMode(blueprint) {
   if (mode === 'snapshot' || mode === 'contract') return mode;
   return 'contract';
 }
+
+
+
+// ============================================================================
+// DB SSOT helpers (mutually exclusive schema synchronization modes)
+// ============================================================================
+
+function dbSsotMode(blueprint) {
+  const db = blueprint && blueprint.db ? blueprint.db : {};
+  return String(db.ssot || 'none');
+}
+
+function dbSsotExclusionsForMode(mode) {
+  const m = String(mode || 'none');
+  if (m === 'repo-prisma') return ['sync-code-schema-from-db'];
+  if (m === 'database') return ['sync-db-schema-from-code'];
+  // 'none' (opt-out) => exclude both DB sync skills
+  return ['sync-db-schema-from-code', 'sync-code-schema-from-db'];
+}
+
+function writeDbSsotConfig(repoRoot, blueprint, apply) {
+  const mode = dbSsotMode(blueprint);
+  const outPath = path.join(repoRoot, 'docs', 'project', 'db-ssot.json');
+
+  const cfg = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    mode,
+    paths: {
+      prismaSchema: 'prisma/schema.prisma',
+      dbMirror: 'db/schema/tables.json',
+      dbContextContract: 'docs/context/db/schema.json'
+    }
+  };
+
+  if (!apply) {
+    return { op: 'write', path: outPath, mode: 'dry-run', note: `db.ssot=${mode}` };
+  }
+
+  writeJson(outPath, cfg);
+  return { op: 'write', path: outPath, mode: 'applied', note: `db.ssot=${mode}` };
+}
+
+function ensureDbSsotConfig(repoRoot, blueprint, apply) {
+  // Backward-compatible alias used by apply stage.
+  // Writes docs/project/db-ssot.json reflecting the selected db.ssot mode.
+  return writeDbSsotConfig(repoRoot, blueprint, apply);
+}
+
+function renderDbSsotAgentsBlock(mode) {
+  const m = String(mode || 'none');
+
+  // Progressive disclosure: minimal routing first, details as nested bullets.
+  const header = `## Database SSOT and synchronization
+
+`;
+
+  const common = [
+    `- DB context contract (LLM-first): \`docs/context/db/schema.json\``,
+    `- SSOT selection file: \`docs/project/db-ssot.json\``
+  ];
+
+  if (m === 'repo-prisma') {
+    return (
+      header +
+      `**Mode: repo-prisma** (SSOT = \`prisma/schema.prisma\`)
+
+` +
+      common.join('\n') +
+      `
+- If you need to change persisted fields / tables: use skill \`sync-db-schema-from-code\`.
+` +
+      `- If you need to mirror an external DB: do NOT; this mode assumes migrations originate in the repo.
+
+` +
+      `Rules:
+- Business layer MUST NOT import Prisma (repositories return domain entities).
+- After schema changes, refresh context via \`node .ai/scripts/dbssotctl.js sync-to-context\`.
+`
+    );
+  }
+
+  if (m === 'database') {
+    return (
+      header +
+      `**Mode: database** (SSOT = running database)
+
+` +
+      common.join('\n') +
+      `
+- If the DB schema changed: use skill \`sync-code-schema-from-db\` (DB → Prisma → mirror → context).
+` +
+      `- Do NOT hand-edit \`prisma/schema.prisma\` or \`db/schema/tables.json\` as desired-state.
+
+` +
+      `Rules:
+- Human runs \`prisma db pull\` against the correct environment.
+- Mirror update: \`node .ai/scripts/dbctl.js import-prisma\`.
+- Context refresh: \`node .ai/scripts/dbssotctl.js sync-to-context\`.
+`
+    );
+  }
+
+  // none
+  return (
+    header +
+    `**Mode: none** (no managed DB SSOT in this repo)
+
+` +
+    common.join('\n') +
+    `
+- DB sync skills are disabled. Document DB changes in workdocs and ask a human to provide a schema snapshot.
+`
+  );
+}
+
+function patchRootAgentsDbSsot(repoRoot, blueprint, apply) {
+  const mode = dbSsotMode(blueprint);
+  const agentsPath = path.join(repoRoot, 'AGENTS.md');
+  const start = '<!-- DB-SSOT:START -->';
+  const end = '<!-- DB-SSOT:END -->';
+
+  const content = renderDbSsotAgentsBlock(mode).trimEnd();
+
+  if (!apply) {
+    return { op: 'edit', path: agentsPath, mode: 'dry-run', note: `update DB SSOT block (${mode})` };
+  }
+
+  let raw = '';
+  if (fs.existsSync(agentsPath)) raw = fs.readFileSync(agentsPath, 'utf8');
+
+  if (!raw.includes(start) || !raw.includes(end)) {
+    // If no managed block exists, append one.
+    const suffix = `
+
+${start}
+${content}
+${end}
+`;
+    fs.writeFileSync(agentsPath, (raw || '').trimEnd() + suffix, 'utf8');
+    return { op: 'edit', path: agentsPath, mode: 'applied', note: 'appended DB SSOT managed block' };
+  }
+
+  const before = raw.split(start)[0];
+  const after = raw.split(end)[1];
+  const next = `${before}${start}
+${content}
+${end}${after}`;
+  fs.writeFileSync(agentsPath, next, 'utf8');
+  return { op: 'edit', path: agentsPath, mode: 'applied', note: `updated DB SSOT managed block (${mode})` };
+}
+
+function patchRootAgentsDbSsotSection(repoRoot, blueprint, apply) {
+  // Backward-compatible alias used by apply stage.
+  return patchRootAgentsDbSsot(repoRoot, blueprint, apply);
+}
+
+function applyDbSsotSkillExclusions(repoRoot, blueprint, apply) {
+  const mode = dbSsotMode(blueprint);
+  const manifestPath = path.join(repoRoot, '.ai', 'skills', '_meta', 'sync-manifest.json');
+  if (!fs.existsSync(manifestPath)) {
+    return { op: 'edit', path: manifestPath, mode: apply ? 'failed' : 'dry-run', note: 'manifest missing' };
+  }
+
+  const manifest = readJson(manifestPath);
+  const existing = Array.isArray(manifest.excludeSkills) ? manifest.excludeSkills.map(String) : [];
+  const cleaned = existing.filter((s) => s !== 'sync-db-schema-from-code' && s !== 'sync-code-schema-from-db');
+  const desired = dbSsotExclusionsForMode(mode);
+  manifest.excludeSkills = uniq([...cleaned, ...desired]);
+
+  if (!apply) {
+    return { op: 'edit', path: manifestPath, mode: 'dry-run', note: `excludeSkills += ${desired.join(', ')}` };
+  }
+
+  writeJson(manifestPath, manifest);
+  return { op: 'edit', path: manifestPath, mode: 'applied', note: `excludeSkills += ${desired.join(', ')}` };
+}
+
+function refreshDbContextContract(repoRoot, blueprint, apply, verifyAddons) {
+  const outPath = path.join(repoRoot, 'docs', 'context', 'db', 'schema.json');
+
+  // Only meaningful when context-awareness exists (contract directory + registry).
+  if (!isContextAwarenessEnabled(blueprint)) {
+    return {
+      op: 'skip',
+      path: outPath,
+      mode: apply ? 'skipped' : 'dry-run',
+      reason: 'context-awareness add-on not enabled'
+    };
+  }
+
+  const dbSsotCtl = path.join(repoRoot, '.ai', 'scripts', 'dbssotctl.js');
+  if (!fs.existsSync(dbSsotCtl)) {
+    return {
+      op: 'skip',
+      path: outPath,
+      mode: apply ? 'failed' : 'dry-run',
+      reason: 'dbssotctl.js not found'
+    };
+  }
+
+  const run1 = runNodeScript(repoRoot, dbSsotCtl, ['sync-to-context', '--repo-root', repoRoot], apply);
+  const actions = [run1];
+
+  if (verifyAddons) {
+    const contextCtl = path.join(repoRoot, '.ai', 'scripts', 'contextctl.js');
+    if (fs.existsSync(contextCtl)) {
+      actions.push(runNodeScriptWithRepoRootFallback(repoRoot, contextCtl, ['verify', '--repo-root', repoRoot], apply));
+    }
+  }
+
+  return { op: 'db-context-refresh', path: outPath, mode: apply ? 'applied' : 'dry-run', actions };
+}
+
 
 // ============================================================================
 // Add-on Detection Functions
@@ -2188,6 +2429,22 @@ if (command === 'validate') {
       handleAddonResult(res, 'observability');
     }
 
+    // DB SSOT bootstrap (docs/project + AGENTS + LLM db context)
+    const dbSsotConfigResult = ensureDbSsotConfig(repoRoot, blueprint, true);
+    if (dbSsotConfigResult.mode === 'applied') {
+      console.log(`[ok] DB SSOT config written: ${path.relative(repoRoot, dbSsotConfigResult.path)}`);
+    }
+    const agentsDbSsotResult = patchRootAgentsDbSsotSection(repoRoot, blueprint, true);
+    if (agentsDbSsotResult.mode === 'applied') {
+      console.log(`[ok] AGENTS.md updated (DB SSOT section)`);
+    }
+    const dbContextRefreshResult = refreshDbContextContract(repoRoot, blueprint, true);
+    if (dbContextRefreshResult.mode === 'applied') {
+      console.log(`[ok] DB context refreshed: ${path.relative(repoRoot, dbContextRefreshResult.path)}`);
+    } else if (dbContextRefreshResult.reason) {
+      console.log(`[info] DB context refresh skipped: ${dbContextRefreshResult.reason}`);
+    }
+
     // Manifest update
     const manifestResult = updateManifest(repoRoot, blueprint, true);
     if (manifestResult.mode === 'failed') {
@@ -2198,6 +2455,12 @@ if (command === 'validate') {
     }
     if (manifestResult.warnings && manifestResult.warnings.length > 0) {
       for (const w of manifestResult.warnings) console.warn(`[warn] ${w}`);
+    }
+
+    // DB SSOT skill mutual exclusion (sync-manifest excludeSkills)
+    const ssotSkillExclusionsResult = applyDbSsotSkillExclusions(repoRoot, blueprint, true);
+    if (ssotSkillExclusionsResult.mode === 'applied') {
+      console.log('[ok] Skill exclusions updated for DB SSOT');
     }
 
     // Sync wrappers
@@ -2251,6 +2514,10 @@ if (command === 'validate') {
         addons: addonResults,
         scaffold: scaffoldPlan,
         configs: configResults,
+        dbSsotConfig: dbSsotConfigResult,
+        agentsDbSsot: agentsDbSsotResult,
+        dbContextContract: dbContextRefreshResult,
+        dbSsotSkillExclusions: ssotSkillExclusionsResult,
         readme: readmeResult,
         skillRetentionTemplate: retentionTemplateResult,
         manifest: manifestResult,
@@ -2262,6 +2529,7 @@ if (command === 'validate') {
       console.log('[ok] Apply completed.');
       console.log(`- Blueprint: ${path.relative(repoRoot, blueprintPath)}`);
       console.log(`- Docs root: ${path.relative(repoRoot, docsRoot)}`);
+      console.log(`- DB SSOT: ${blueprint.db && blueprint.db.ssot ? blueprint.db.ssot : 'unknown'}`);
       if (contextAddon && contextAddon.enabled) {
         console.log(`- Context awareness: enabled (addonsRoot=${addonsRoot})`);
       }

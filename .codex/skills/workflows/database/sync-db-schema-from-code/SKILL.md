@@ -1,6 +1,6 @@
 ---
 name: sync-db-schema-from-code
-description: Sync database schema from project code to a remote DB (PostgreSQL/MySQL/SQLite) using Prisma (default migrate) or SQLAlchemy/Alembic; includes diff preview and approval gates.
+description: Apply schema changes from repo SSOT (prisma/schema.prisma) to a target DB via Prisma migrations, with diff preview + approval gate; then refresh LLM context (docs/context/db/schema.json).
 category: workflows/database
 ssot_path: .ai/skills/workflows/database/sync-db-schema-from-code
 ---

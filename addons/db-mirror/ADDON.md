@@ -2,24 +2,24 @@
 
 ## Conclusions (read first)
 
-- The add-on provides a **database schema mirroring** system under `db/`.
-- Real databases are the **single source of truth**; the repository holds structured mirrors.
-- AI/LLM uses these mirrors to understand schema, propose changes, and plan migrations.
-- All database operations go through scripts - no direct database manipulation by AI.
+- This add-on is intended for projects where the **real database is the SSOT**.
+- The repository holds **structured mirrors** under `db/` so the LLM can understand the schema without DB access.
+- `db/schema/tables.json` is a **generated snapshot** (normalized-db-schema-v2). Do NOT hand-edit it.
+- The canonical LLM context contract is `docs/context/db/schema.json` and is generated via `dbssotctl`.
 
-## What this add-on writes (blast radius)
+## What the add-on writes (blast radius)
 
 New files/directories (created if missing):
 
 - `db/` (database artifacts root)
   - `db/AGENTS.md` (LLM guidance)
-  - `db/schema/` (table structure mirrors)
-  - `db/migrations/` (migration files)
-  - `db/config/` (database environment configuration)
+  - `db/schema/tables.json` (generated schema mirror)
+  - `db/migrations/` (optional SQL files for humans)
+  - `db/config/` (environment metadata; no secrets)
   - `db/samples/` (sample/seed data)
-  - `db/workdocs/` (design decisions and plans)
-- `.ai/scripts/dbctl.js` (schema mirror management)
-- `.ai/scripts/migrate.js` (migration execution)
+  - `db/workdocs/` (DB change proposals, rollout plans)
+- `.ai/scripts/dbctl.js` (mirror controller)
+- `.ai/scripts/migrate.js` (optional migration tracking)
 - `docs/addons/db-mirror/` (add-on documentation)
 
 ## Install
@@ -30,19 +30,22 @@ Enable in your `project-blueprint.json`:
 
 ```json
 {
-  "addons": {
-    "dbMirror": true
-  },
   "db": {
     "enabled": true,
+    "ssot": "database",
     "kind": "postgres",
     "environments": ["dev", "staging", "prod"],
     "migrationTool": "prisma"
+  },
+  "addons": {
+    "contextAwareness": true,
+    "dbMirror": true
   }
 }
 ```
 
 Then run:
+
 ```bash
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs apply --blueprint init/project-blueprint.json
 ```
@@ -57,90 +60,60 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 
 ## Usage
 
-### Schema Management
+### Mirror management
 
 ```bash
 # Initialize db mirror structure
 node .ai/scripts/dbctl.js init
 
-# Add a table to the schema mirror
-node .ai/scripts/dbctl.js add-table --name users --columns "id:uuid:pk,email:string:unique,created_at:timestamp"
+# Import prisma/schema.prisma into the mirror
+node .ai/scripts/dbctl.js import-prisma
 
-# List tables in the schema
+# List tables in the mirror
 node .ai/scripts/dbctl.js list-tables
 
-# Verify schema consistency
-node .ai/scripts/dbctl.js verify --env dev
+# Verify mirror file is parseable
+node .ai/scripts/dbctl.js verify --strict
 ```
 
-### Migration Management
-
-```bash
-# Generate a new migration
-node .ai/scripts/dbctl.js generate-migration --name add-user-roles
-
-# List migrations (and per-environment tracking status)
-node .ai/scripts/migrate.js list
-
-# Review what would be applied (script does NOT execute SQL)
-node .ai/scripts/migrate.js plan --env staging
-
-# After a human applies the SQL manually, mark it applied for tracking
-node .ai/scripts/migrate.js mark-applied --migration 20241228120000_add_users.sql --env staging
-```
-
-### Context Awareness Bridge (optional)
+### Context awareness bridge (recommended)
 
 If the context-awareness add-on is enabled, sync the mirror into `docs/context/`:
 
 ```bash
-node .ai/scripts/dbctl.js sync-to-context
+node .ai/scripts/dbssotctl.js sync-to-context
 ```
 
-The command updates `docs/context/db/schema.json` and (best-effort) runs `contextctl touch` so `contextctl verify` passes.
+The command updates `docs/context/db/schema.json` and (best effort) runs `contextctl touch`.
 
-### Environment Configuration
+### Migration tracking (optional)
 
-Database environments are defined in `db/config/db-environments.json`:
-
-```json
-{
-  "environments": [
-    {
-      "id": "dev",
-      "description": "Local development",
-      "connectionTemplate": "postgresql://${DB_USER}:${DB_PASSWORD}@localhost:5432/${DB_NAME}",
-      "permissions": {
-        "migrations": true,
-        "seedData": true,
-        "directQueries": true
-      }
-    }
-  ]
-}
-```
-
-## AI/LLM Guidelines
-
-When working with this add-on, AI SHOULD:
-
-1. **Read** `db/schema/tables.json` to understand current schema
-2. **Propose** schema changes by editing the mirror files
-3. **Generate** migrations via `dbctl generate-migration`
-4. **Document** intentions in `db/workdocs/`
-5. **Never** directly connect to databases or run arbitrary SQL
-
-Humans execute migrations and handle credentials.
-
-## Verification
+This add-on may be used to track DB changes executed by humans:
 
 ```bash
-# Verify schema mirror is consistent
-node .ai/scripts/dbctl.js verify
+# Create an empty SQL file for humans to fill/apply
+node .ai/scripts/dbctl.js generate-migration --name add-user-roles
 
-# Check migration status
-node .ai/scripts/migrate.js status --env staging
+# Track applied migrations per environment (manual bookkeeping)
+node .ai/scripts/migrate.js list
+node .ai/scripts/migrate.js mark-applied --migration 20260101120000_add_user_roles.sql --env staging
 ```
+
+## AI/LLM guidelines
+
+When working with the add-on, AI SHOULD:
+
+1. Read `db/schema/tables.json` for **current state**.
+2. Write proposals in `db/workdocs/` (desired state, risk notes, rollout plan).
+3. Ask humans to apply DDL/migrations.
+4. After DB changes: re-run `prisma db pull`, `dbctl import-prisma`, and `dbssotctl sync-to-context`.
+
+AI MUST NOT:
+
+- directly connect to databases
+- run arbitrary SQL
+- store credentials
+- hand-edit `db/schema/tables.json`
 
 ## Rollback / Uninstall
 

@@ -1,75 +1,44 @@
 #!/usr/bin/env node
 /**
- * explain-context-addon.js - Quick Reference for Context Awareness Add-on
+ * explain-context-addon.js
  *
- * Prints a summary of the context awareness add-on, its purpose,
- * and available commands.
+ * Quick reference for the Context Awareness add-on.
  */
 
 console.log(`
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                      Context Awareness Add-on                                 ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  PURPOSE                                                                     ║
-║  ───────                                                                     ║
-║  This add-on provides a stable, verifiable context layer for AI/LLM          ║
-║  interactions. Instead of ad-hoc repository scanning, the LLM reads          ║
-║  from curated artifacts in docs/context/.                                    ║
-║                                                                              ║
-║  KEY FILES                                                                   ║
-║  ─────────                                                                   ║
-║  docs/context/INDEX.md          Entry point documentation                    ║
-║  docs/context/registry.json     Canonical artifact index                     ║
-║  docs/context/api/              API contracts (OpenAPI)                      ║
-║  docs/context/db/               Database schema mappings                     ║
-║  docs/context/process/          Business processes (BPMN)                    ║
-║                                                                              ║
-║  .ai/project/state.json         Project state and configuration              ║
-║  .ai/skills/_meta/packs/        Skill pack definitions                       ║
-║                                                                              ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  AVAILABLE SCRIPTS                                                           ║
-║  ─────────────────                                                           ║
-║                                                                              ║
-║  contextctl.js - Manage context artifacts and registry                       ║
-║  ─────────────────────────────────────────────────────                       ║
-║    init              Create docs/context/ skeleton (idempotent)              ║
-║    add-artifact      Register a new artifact                                 ║
-║    remove-artifact   Remove an artifact from registry                        ║
-║    touch             Update checksums after editing files                    ║
-║    verify            Verify registry consistency (use in CI)                 ║
-║    list              List all registered artifacts                           ║
-║                                                                              ║
-║  projectctl.js - Manage project state                                        ║
-║  ────────────────────────────────                                            ║
-║    init              Initialize .ai/project/state.json                       ║
-║    get <key>         Read a state value                                      ║
-║    set <key> <val>   Write a state value                                     ║
-║    set-context-mode  Set mode: contract or snapshot                          ║
-║    verify            Validate project state                                  ║
-║    show              Display current state                                   ║
-║                                                                              ║
-║  skillsctl.js - Manage skill packs                                           ║
-║  ─────────────────────────────────                                           ║
-║    list-packs        Show available packs                                    ║
-║    enable-pack       Enable a pack (updates manifest + sync)                 ║
-║    disable-pack      Disable a pack                                          ║
-║    sync              Sync skill wrappers to providers                        ║
-║                                                                              ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  QUICK START                                                                 ║
-║  ───────────                                                                 ║
-║  1. node .ai/scripts/contextctl.js init                                      ║
-║  2. node .ai/scripts/projectctl.js init                                      ║
-║  3. node .ai/scripts/skillsctl.js enable-pack context-core --providers both  ║
-║                                                                              ║
-║  CI VERIFICATION                                                             ║
-║  ───────────────                                                             ║
-║  node .ai/scripts/contextctl.js verify --strict                              ║
-║  node .ai/scripts/projectctl.js verify                                       ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+Context Awareness Add-on
+========================
+
+Purpose
+- Provide a stable, verifiable context layer for AI/LLM.
+- Primary entry point: docs/context/ (NOT ad-hoc repo scanning).
+
+Key files
+- docs/context/INDEX.md                 Human/LLM entry point
+- docs/context/registry.json            Canonical artifact index + checksums
+- docs/context/db/schema.json           DB schema contract (generated)
+- docs/context/api/openapi.yaml         API contract (if used)
+- docs/context/process/*.bpmn           Process contracts (if used)
+
+Scripts
+- node .ai/scripts/contextctl.js init              Initialize docs/context/ (idempotent)
+- node .ai/scripts/contextctl.js touch             Update registry checksums
+- node .ai/scripts/contextctl.js verify --strict   Verify registry consistency (CI-friendly)
+
+- node .ai/scripts/projectctl.js init              Initialize .ai/project/state.json
+- node .ai/scripts/projectctl.js show              Display current project state
+
+- node .ai/scripts/skillsctl.js status             Show enabled skill packs + manifest
+- node .ai/scripts/skillsctl.js list-packs         List available packs
+
+Database schema contract
+- Do NOT hand-edit docs/context/db/schema.json.
+- Update it via the SSOT-aware generator:
+  node .ai/scripts/dbssotctl.js sync-to-context
+
+Quick start
+1) node .ai/scripts/contextctl.js init
+2) node .ai/scripts/projectctl.js init
+3) node .ai/scripts/dbssotctl.js status
+4) node .ai/scripts/contextctl.js verify --strict
 `);

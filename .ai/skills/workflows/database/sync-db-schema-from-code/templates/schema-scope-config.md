@@ -52,7 +52,7 @@ When using the schema snapshot script:
 python3 ./scripts/db_schema_snapshot.py \
   --url "$DATABASE_URL" \
   --exclude-schemas extensions,tiger,topology \
-  --out "dev-docs/active/<task>/db/artifacts/schema_snapshot.json"
+  --out "<evidenceDir>/schema_snapshot.json"
 ```
 
 ## Common extension schemas to exclude

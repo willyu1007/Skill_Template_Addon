@@ -148,6 +148,9 @@ Blueprint mapping notes:
 
 Based on Phases 1-2, generate `init/project-blueprint.json` (working location during initialization).
 
+Important: **DB schema SSOT mode is mandatory**. Record it as `db.ssot` with one of: `none`, `repo-prisma`, `database`. This decision controls which DB synchronization workflow and add-ons are valid.
+
+
 ### Minimal blueprint template
 
 ```json
@@ -167,6 +170,13 @@ Based on Phases 1-2, generate `init/project-blueprint.json` (working location du
     "backend": { "enabled": <true|false>, "framework": "<framework>" },
     "api": { "style": "<rest|graphql|rpc|none>", "auth": "<auth strategy>" },
     "database": { "enabled": <true|false>, "kind": "<db kind>" }
+  },
+  "db": {
+    "enabled": <true|false>,
+    "ssot": "<none|repo-prisma|database>",
+    "kind": "<db kind>",
+    "environments": ["dev"],
+    "migrationTool": "prisma"
   },
   "quality": {
     "testing": { "unit": true },
@@ -200,7 +210,7 @@ Recommend add-ons based on `capabilities` in the blueprint. See **Module D** in 
 | Condition | Recommended add-on |
 |----------|---------------------|
 | `api.style != "none"` or `database.enabled` or `bpmn.enabled` | `contextAwareness` |
-| `database.enabled: true` | `dbMirror` |
+| `db.ssot == "database"` | `dbMirror` |
 | Needs containerization | `packaging` |
 | Needs multi-environment deployment | `deployment` |
 | Needs versioning/changelog workflows | `release` |
@@ -418,7 +428,8 @@ check capabilities
 ├── api.style != "none"
 │   └── recommended: contextAwareness
 ├── database.enabled
-│   ├── recommended: contextAwareness
+│   └── recommended: contextAwareness
+├── db.ssot == "database"
 │   └── recommended: dbMirror
 ├── bpmn.enabled
 │   └── recommended: contextAwareness

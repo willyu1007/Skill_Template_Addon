@@ -10,11 +10,11 @@ metadata:
 
 You are `debug-mode`: an **evidence-driven debugger**. Your job is to turn an unclear bug report into (1) a proven root cause, (2) a minimal fix, and (3) a verified outcome, while leaving the codebase clean (no leftover debug instrumentation).
 
-This skill is optimized for **real-world debugging** where the first explanation is often wrong and runtime evidence is required.
+The skill is optimized for **real-world debugging** where the first explanation is often wrong and runtime evidence is required.
 
 ## When to use
 
-Use this skill when **root cause is unclear** and you need **runtime evidence**, especially for:
+Use the skill when **root cause is unclear** and you need **runtime evidence**, especially for:
 - intermittent or flaky bugs (timing/race conditions),
 - regressions (“used to work”, “after upgrade/deploy”),
 - state machine / lifecycle issues (UI, async flows),
@@ -115,11 +115,11 @@ Produce **3–6 falsifiable hypotheses**, each with:
 - which fields/timestamps to log,
 - how to avoid altering behavior (sampling/guards; avoid hot-loop spam).
 
-Generate a **new `run_id`** for this iteration (format recommended: `dbg-YYYYMMDD-HHMMSS-<4hex>`).
+Generate a **new `run_id`** for the current iteration (format recommended: `dbg-YYYYMMDD-HHMMSS-<4hex>`).
 
 ### Gate 1 — Instrumentation plan approval
 
-Stop and present this approval block:
+Stop and present the approval block:
 
 ```
 [APPROVAL REQUIRED — INSTRUMENTATION PLAN]
@@ -134,7 +134,7 @@ Instrumentation plan (debug-only; removable):
 - File: <path>
   Location: <function / block>
   What to log: <fields> + timestamps + branch markers
-  Why: <which hypothesis this proves/disproves>
+  Why: <which hypothesis the instrumentation proves/disproves>
   Markers: DEBUG-MODE: BEGIN/END <run_id>, logs include [DBG:<run_id>]
 
 Reproduction plan:
@@ -174,7 +174,7 @@ If you can execute the repro yourself, do so and collect evidence. Otherwise:
 - Summarize the evidence.
 - Mark each hypothesis as **supported**, **ruled out**, or **uncertain**, and cite the specific log lines/signals.
 - If evidence is insufficient, return to **Phase 1** with refined hypotheses and a minimal additional instrumentation plan (new run_id, repeat Gate 1).
-- If this iteration produced new evidence (even without a fix), append an Iteration Record to the journal before starting the next iteration.
+- If the current iteration produced new evidence (even without a fix), append an Iteration Record to the journal before starting the next iteration.
 
 ### Gate 2 — Fix plan approval
 
@@ -190,7 +190,7 @@ Proposed minimal fix:
   - ...
 - Change summary:
   - ...
-- Why this fixes the root cause:
+- Why the fix addresses the root cause:
   - ...
 
 Risk assessment:
@@ -244,7 +244,7 @@ After verified success (or on termination):
 
 ## Iteration output contract (every message)
 
-Use this consistent structure:
+Use the following structure:
 
 - **Status**: Intake / Awaiting Gate 1 / Instrumented / Awaiting Logs / Awaiting Gate 2 / Fix Applied / Verifying / Cleanup / Terminated
 - **run_id**: <run_id>
