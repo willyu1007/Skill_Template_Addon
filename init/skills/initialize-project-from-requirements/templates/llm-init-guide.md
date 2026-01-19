@@ -16,7 +16,7 @@ The document provides **step-by-step guidance** for an AI assistant to help a us
 2. [Phase 1: Requirements interview](#phase-1-requirements-interview)
 3. [Phase 2: Technology stack selection](#phase-2-technology-stack-selection)
 4. [Phase 3: Blueprint generation](#phase-3-blueprint-generation)
-5. [Phase 4: Add-on recommendations](#phase-4-add-on-recommendations)
+5. [Phase 4: Feature recommendations](#phase-4-feature-recommendations)
 6. [Phase 5: Configuration generation](#phase-5-configuration-generation)
 7. [Post-init: Record key info in AGENTS.md](#post-init-record-key-info-in-agentsmd)
 8. [Decision tree reference](#decision-tree-reference)
@@ -45,7 +45,7 @@ user starts initialization
               │
               ▼
 ┌────────────────────────────┐
-│ Phase 4: add-ons            │  ← recommend add-ons based on capabilities
+│ Phase 4: features            │  ← recommend features based on capabilities
 └─────────────┬──────────────┘
               │
               ▼
@@ -88,7 +88,7 @@ During initialization, write the answers into these files (working location):
 - `init/stage-a-docs/domain-glossary.md` - domain glossary
 - `init/stage-a-docs/risk-open-questions.md` - risks and open questions
 
-> **Note**: After initialization completes, use `cleanup-init --archive` to move these files to `docs/project/`.
+> **Note**: After initialization completes, use `cleanup-init` to move these files to `docs/project/`.
 
 ---
 
@@ -148,7 +148,7 @@ Blueprint mapping notes:
 
 Based on Phases 1-2, generate `init/project-blueprint.json` (working location during initialization).
 
-Important: **DB schema SSOT mode is mandatory**. Record it as `db.ssot` with one of: `none`, `repo-prisma`, `database`. This decision controls which DB synchronization workflow and add-ons are valid.
+Important: **DB schema SSOT mode is mandatory**. Record it as `db.ssot` with one of: `none`, `repo-prisma`, `database`. This decision controls which DB synchronization workflow and features are valid.
 
 
 ### Minimal blueprint template
@@ -185,7 +185,7 @@ Important: **DB schema SSOT mode is mandatory**. Record it as `db.ssot` with one
   "skills": {
     "packs": ["workflows"]
   },
-  "addons": {}
+  "features": {}
 }
 ```
 
@@ -197,17 +197,17 @@ Important: **DB schema SSOT mode is mandatory**. Record it as `db.ssot` with one
 | `capabilities.backend.enabled: true` | `backend` |
 | `capabilities.frontend.enabled: true` | `frontend` |
 | Needs code standards | `standards` |
-| `addons.contextAwareness: true` | `context-core` (provided by the add-on) |
+| `features.contextAwareness: true` | `context-core` (optional; context-related scaffold skills) |
 
 ---
 
-## Phase 4: Add-on recommendations
+## Phase 4: Feature recommendations
 
-Recommend add-ons based on `capabilities` in the blueprint. See **Module D** in `conversation-prompts.md` for detailed decision prompts for each add-on.
+Recommend features based on `capabilities` in the blueprint. See **Module D** in `conversation-prompts.md` for detailed decision prompts for each feature.
 
 ### Quick recommendation rules
 
-| Condition | Recommended add-on |
+| Condition | Recommended feature |
 |----------|---------------------|
 | `api.style != "none"` or `database.enabled` or `bpmn.enabled` | `contextAwareness` |
 | `db.ssot == "database"` | `dbMirror` |
@@ -219,12 +219,12 @@ Recommend add-ons based on `capabilities` in the blueprint. See **Module D** in 
 ### Example prompt
 
 ```
-Based on your project needs, I recommend these add-ons:
+Based on your project needs, I recommend these features:
 
 1. ✅ context-awareness - your project has an API and a database
 2. ✅ db-mirror - database schema management
 
-Do you want to enable these add-ons?
+Do you want to enable these features?
 ```
 
 ---
@@ -421,7 +421,7 @@ choose language
     └── recommended: xmake > cmake
 ```
 
-### Capabilities → add-on recommendations
+### Capabilities → feature recommendations
 
 ```
 check capabilities
@@ -486,7 +486,7 @@ AI: Great. I'll generate the project blueprint. Based on your needs, I recommend
 - Backend: Express
 - Database: PostgreSQL
 
-Recommended add-ons:
+Recommended features:
 - ✅ context-awareness (API/database contract management)
 - ✅ db-mirror (database schema management)
 

@@ -10,9 +10,9 @@ Produce a single, goal-aligned macro-level roadmap as a Markdown document that c
 
 ## When to use
 Use the plan-maker skill when:
-- **Strong trigger**: The user mentions "roadmap" (路线图) — MUST use the `plan-maker` skill
-- The user asks for a plan/milestones/implementation plan (规划/方案/里程碑/实施计划) before coding
-- The user asks to "align thinking first" (先对齐思路) before planning
+- **Strong trigger**: The user explicitly asks for a roadmap — MUST use the `plan-maker` skill
+- The user asks for a plan, milestones, or an implementation plan before coding
+- The user asks to align on requirements/approach before planning
 - The task is large/ambiguous and benefits from staged execution and verification
 - You need a roadmap artifact saved under `dev-docs/active/` for collaboration and handoff
 
@@ -28,7 +28,7 @@ Avoid the skill when:
   - **Interactive collection**: Collect requirements through Q&A dialogue with the user
   - **Both**: Read existing document AND supplement with interactive Q&A
 - Requirements alignment mode (optional):
-  - If user requests "align thinking first" (先对齐思路), generate requirements document to `dev-docs/active/<task>/requirement.md` before creating roadmap
+  - If user requests to align on requirements/approach first, generate a requirements document at `dev-docs/active/<task>/requirement.md` before creating the roadmap
   - See `./templates/requirement.md` for the requirements document template
 
 ## Outputs
@@ -42,7 +42,7 @@ Avoid the skill when:
 ### Phase 0 — Requirements alignment (optional, triggered by user request)
 
 0. **Check for requirements alignment request**:
-   - If user asks to "align thinking first" (先对齐思路) or provides an existing requirements document:
+   - If user asks to align on requirements/approach first, or provides an existing requirements document:
      - Proceed to step 0a
    - Otherwise, skip to step 1
 
@@ -114,7 +114,7 @@ Avoid the skill when:
 - MUST NOT modify application/source code, project configuration, or database state
 - MUST ask clarifying questions when the goal or constraints are ambiguous
 - MUST NOT invent project-specific facts (APIs, file paths, schemas) without evidence
-- **MUST use the `plan-maker` skill when user mentions "roadmap"** (强触发关键词)
+- **MUST use the `plan-maker` skill when the user mentions "roadmap"** (hard trigger phrase)
 - If the user asks to implement immediately but the task is non-trivial, produce the roadmap first, then ask for confirmation to proceed with execution in a follow-up turn.
 - If the task meets the dev-docs Decision Gate, **MUST prompt user** whether to continue with `create-dev-docs-plan`
 - If user confirms dev-docs bundle creation, **MUST trigger `create-dev-docs-plan` skill**

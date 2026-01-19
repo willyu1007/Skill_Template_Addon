@@ -29,14 +29,13 @@
     "kind": "other",
     "environments": []
   },
-  "addons": {
+  "features": {
     "contextAwareness": false,
     "dbMirror": false,
     "packaging": false,
     "deployment": false,
     "release": false,
-    "observability": false,
-    "documentation": false
+    "observability": false
   },
   "skills": {
     "packs": [

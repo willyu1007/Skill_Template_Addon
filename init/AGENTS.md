@@ -74,8 +74,6 @@ After user approval:
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs approve --stage C --repo-root .
 ```
 
-Note: when approving Stage C in an interactive shell, the pipeline will ask whether to keep the `addons/` directory; choosing to clean will delete the add-on payloads under `addons/` (installed project files remain).
-
 ---
 
 ## Stage C troubleshooting (EPERM)
@@ -84,16 +82,16 @@ If Stage C `apply` fails with an `EPERM` error while writing `.codex/skills/` or
 
 ---
 
-## Add-on notes (context awareness)
+## Feature notes (context awareness)
 
-If the blueprint enables context awareness (`addons.contextAwareness: true`), `apply` will:
-- install missing files from `addons/context-awareness/payload/` (copy-if-missing; non-destructive)
+If the blueprint enables context awareness (`features.contextAwareness: true`), Stage C `apply` will:
+- copy templates from `.ai/skills/features/context-awareness/feature-context-awareness/templates/` into the repo (copy-if-missing; non-destructive)
 - run `.ai/scripts/contextctl.js init`
 - run `.ai/scripts/projectctl.js init` and `set-context-mode` (if projectctl exists)
 
-`context.*` is configuration only and does not trigger installation.
+`context.*` is configuration only and does not trigger enabling by itself.
 
-See `addon-docs/context-awareness.md` for details.
+See `.ai/skills/features/context-awareness/feature-context-awareness/` for details.
 
 ---
 
@@ -194,12 +192,6 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 
 The command archives Stage A docs and blueprint from `init/` to `docs/project/` before removing `init/`.
 
-**Option C: Archive all + prune unused add-ons**
-
-```bash
-node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs cleanup-init \
-  --repo-root . --apply --i-understand --archive --cleanup-addons
-```
 
 **Selective archive options:**
 - `--archive` - Archive all (docs + blueprint)

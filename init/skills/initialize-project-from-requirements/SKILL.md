@@ -25,19 +25,17 @@ Working location (default: `init/stage-a-docs/`):
 
 Working location (default): `init/project-blueprint.json`
 
-> **Note**: After initialization completes, use `cleanup-init --archive` to move these files to `docs/project/` for long-term retention.
+> After initialization completes, use `cleanup-init --archive` to move these files to `docs/project/` for long-term retention.
 
-### Optional: add-on (Context Awareness)
+### Optional: features
 
-If `blueprint.addons.contextAwareness: true`, the add-on payload must exist at:
+Feature flags live under `blueprint.features`.
 
-- `<repoRoot>/<addonsRoot>/context-awareness/payload/`
+**No external payload directory is required.** Feature templates are integrated in this template under:
 
-Where `<addonsRoot>` defaults to `addons/` and can be overridden via `apply --addons-root`.
+- `.ai/skills/features/<feature-id>/feature-<feature-id>/templates/`
 
-### Post-init (skill retention preferences)
-
-- Skills to keep/delete after Stage C (or record TBD in the retention table)
+Stage C `apply` materializes enabled features by copying templates into the repo (copy-if-missing by default) and then running the corresponding `.ai/scripts/*ctl.js init` commands.
 
 ---
 
@@ -53,8 +51,9 @@ Where `<addonsRoot>` defaults to `addons/` and can be overridden via `apply --ad
 
 - Stage A docs: `docs/project/*`
 - Blueprint: `docs/project/project-blueprint.json`
+- Init state board: `docs/project/init-state.json`
 
-### Stage C
+### Stage C outputs
 
 - Directory scaffold (examples):
   - `src/` or `apps/` + `packages/` (based on `repo.layout`)
@@ -64,33 +63,32 @@ Where `<addonsRoot>` defaults to `addons/` and can be overridden via `apply --ad
 - Root `README.md` may be generated from the blueprint when `scripts/templates/README.template.md` is present
 - Skills selection (SSOT):
   - `.ai/skills/_meta/sync-manifest.json` (flat schema: `version/includePrefixes/includeSkills/excludeSkills`)
-  - Add-on mode: if `.ai/scripts/skillsctl.js` exists, pack toggles must be done via skillsctl (scheme A)
+  - If `.ai/scripts/skillsctl.js` exists, pack toggles must be done via skillsctl
 - Provider wrappers generated/updated:
   - `node .ai/scripts/sync-skills.cjs` (supports `--providers`)
 
-### Post-init artifacts
+### Optional feature outputs
 
-- `init/skill-retention-table.template.md` (copy of the template for retention decisions)
+Depending on `blueprint.features`, Stage C may also materialize:
 
-### Optional: Context Awareness add-on artifacts
-
-When Context Awareness is enabled and `apply` runs successfully, you will typically see:
-
-- `.ai/scripts/contextctl.js`
-- `.ai/scripts/projectctl.js`
-- `docs/context/` (registries/workflows/etc., depending on the add-on implementation)
+- Context Awareness: `docs/context/**` + `config/environments/**` (and related context contracts)
+- DB Mirror: `db/**`
+- Packaging: `ops/packaging/**` + `docs/packaging/registry.json`
+- Deployment: `ops/deploy/**`
+- Observability: `observability/**` + `docs/context/observability/**`
+- Release: `release/**` + `.releaserc.json.template`
 
 ---
 
 ## Mandatory workflow rules
 
 1. Every stage transition requires **validation + explicit user approval**.
-   - Validation is recorded in `init/.init-state.json` by pipeline commands
-   - Stage advancement must use `approve` (do not hand-edit the state file to "skip" stages)
+   - Validation is recorded in `init/.init-state.json` by pipeline commands.
+   - Stage advancement must use `approve` (do not hand-edit the state file to "skip" stages).
 2. Do not advance stages without explicit user approval.
-3. Context Awareness add-on is installed **on demand**:
-   - Only when `blueprint.addons.contextAwareness: true` will the pipeline attempt installation from `/addons/<addonId>/payload`
-   - `blueprint.context.*` is configuration only and does not trigger installation
+3. Features are materialized **on demand**:
+   - Only `blueprint.features.*` triggers materialization.
+   - `blueprint.context.*` is configuration only and does not trigger enabling by itself.
 4. The manifest schema is the **flat schema** (do not use older nested shapes like `collections.current`).
 5. Config generation has a single SSOT: `scripts/scaffold-configs.cjs`.
 6. Do not create dev-docs task bundles during initialization; use dev-docs after init completes.
@@ -151,7 +149,7 @@ After the user reviews the blueprint and explicitly approves, run:
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs approve --stage B --repo-root .
 ```
 
-### 3) Stage C: write scaffold/configs/packs/wrappers -> user approval
+### 3) Stage C: write scaffold/configs/packs/features/wrappers -> user approval
 
 ```bash
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs apply \
@@ -161,15 +159,13 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 
 Stage C `apply` may generate a project-specific root `README.md` from the blueprint via `scripts/templates/README.template.md`. If the file is generated, include `README.md` in the Stage C review.
 
+Troubleshooting: if Stage C `apply` fails with `EPERM` when writing `.codex/skills/` or `.claude/skills/`, re-run the same `apply` command in an elevated shell. Do not change the blueprint between attempts.
+
 After the user reviews the changes and explicitly approves, run:
 
 ```bash
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs approve --stage C --repo-root .
 ```
-
-Note: when approving Stage C in an interactive shell, the pipeline will ask whether to keep the `addons/` directory; choosing to clean will delete the add-on payloads under `addons/` (installed project files remain).
-
-Troubleshooting: if Stage C `apply` fails with `EPERM` when writing `.codex/skills/` or `.claude/skills/`, re-run the same `apply` command in an elevated shell. Do not change the blueprint between attempts.
 
 ### 4) Post-init: skill retention and pruning (required)
 
@@ -187,15 +183,13 @@ node .ai/scripts/delete-skills.cjs --skills "<csv>" --yes
 
 (`delete-skills.cjs` is an alias of `delete-skill.cjs`.)
 
-Optional removals (like `agent_builder`) should go through the same flow.
-
 ### 5) Post-init: update root README.md and AGENTS.md (recommended)
 
 After Stage C approval, explicitly ask:
 
-> Do you want to record the project type, tech stack, and key directories in the root `AGENTS.md`, and update the root `README.md`? Reply `"update agents"` to proceed, or reply `"done"` to skip.
+> Do you want to record the project type, tech stack, and key directories in the root `AGENTS.md`, and update the root `README.md`?
 
-If user replies `"update agents"`, update the root `AGENTS.md` with project-specific info. Show a diff and request explicit approval before writing. See `## Post-init: Update README.md and AGENTS.md` in the document for rules.
+If approved, update and show a diff before writing.
 
 ### 6) Optional: remove the init kit
 
@@ -210,210 +204,26 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 
 ---
 
-## Context Awareness add-on notes
+## Context Awareness feature notes
 
 ### How the workflow is triggered
 
-To trigger add-on installation/init, set:
-- `blueprint.addons.contextAwareness: true`
+To trigger feature materialization/init, set:
 
-Optional (configuration only; does not trigger installation):
+- `blueprint.features.contextAwareness: true`
+
+Optional (configuration only; does not trigger enabling):
+
 - `blueprint.context.mode: "contract" | "snapshot"` (default: `contract`)
 
-### Key scripts (provided by the add-on)
+### Key scripts
 
 - `.ai/scripts/contextctl.js`
   - `init`: initializes the `docs/context/` scaffold (idempotent)
 - `.ai/scripts/projectctl.js`
-  - `init`: initializes project state (idempotent)
+  - `init`: initializes `.ai/project/state.json` (idempotent)
   - `set-context-mode <contract|snapshot>`: sets the context mode
-- `.ai/scripts/skillsctl.js` (scheme A)
+- `.ai/scripts/skillsctl.js`
   - `enable-pack <packId> --no-sync`: enables a pack (writes manifest)
 
----
-
-## `addons/` directory convention (if needed)
-
-The init pipeline supports add-ons in a minimally invasive way:
-
-- Default add-on location: `/addons/context-awareness/payload/`
-- `apply --addons-root <path>` changes the add-on root (for example, `third_party/addons`)
-
-The payload is merged into the repo root using a "copy missing only" policy (non-destructive; does not overwrite existing files) to reduce the blast radius.
-
----
-
-## DevOps scaffold (see `init/stages/03-stage-c-scaffold-and-skills.md`)
-
-When any of these conditions are true, Stage C will create an `ops/` scaffold:
-
-- `blueprint.quality.ci.enabled: true`
-- `blueprint.quality.devops.*` is enabled
-- `blueprint.devops.enabled: true` (or any sub-toggle)
-
-Typical structure:
-- `ops/packaging/{services,jobs,apps,scripts,workdocs}/`
-- `ops/deploy/{http_services,workloads,clients,scripts,workdocs}/`
-
-These are scaffolding placeholders (cloud/CI-agnostic) intended to be extended later.
-
----
-
-## LLM-guided initialization
-
-The skill supports an LLM (AI assistant) guiding the user through initialization without requiring the user to manually author configs up-front.
-
-### Guidance docs
-
-- `templates/llm-init-guide.md` - full guide for LLM-driven initialization
-- `templates/conversation-prompts.md` - question bank and branching modules
-
-### High-level flow
-
-```
-Phase 1: requirements interview -> Phase 2: tech stack selection -> Phase 3: blueprint generation
-    -> Phase 4: add-on recommendations -> Phase 5: configuration generation -> run apply
-```
-
-### Phase 1-4: guided conversation
-
-Follow the question order in `conversation-prompts.md`:
-
-1. **Module A**: must-ask questions (needs, users, constraints)
-2. **Module B**: branch modules (API, database, BPMN, CI)
-3. **Module D**: add-on decisions
-4. **Module E**: tech stack selection (language, frameworks, package manager)
-
-### Phase 5: configuration generation
-
-#### Languages with built-in templates
-
-For these languages, the `apply` command can generate config via built-in templates:
-
-| Language | Template directory |
-|----------|--------------------|
-| TypeScript/JavaScript | `scaffold-configs/typescript-pnpm/` |
-| Go | `scaffold-configs/go/` |
-| C/C++ | `scaffold-configs/cpp-xmake/` |
-| React Native | `scaffold-configs/react-native-typescript/` |
-
-#### Languages without built-in templates (LLM-generated)
-
-For these languages, the LLM should generate configs based on `llm-init-guide.md`:
-
-- Python -> `pyproject.toml`, directory layout
-- Java -> `build.gradle.kts` or `pom.xml`
-- Kotlin -> `build.gradle.kts`
-- .NET -> `*.csproj`, `global.json`
-- Rust -> `Cargo.toml`
-- Other -> follow the language's standard tooling conventions
-
-**LLM generation flow**:
-
-1. `apply` detects that no template exists and prints guidance
-2. The LLM reads `blueprint.repo.language` and related framework/tooling choices
-3. Use Phase 5 in `llm-init-guide.md` as the rulebook
-4. Generate the needed config files and minimal directory structure
-5. After user confirmation, continue the pipeline
-
-### Example conversation (short)
-
-```
-AI: Let's start initializing your project. First, in one sentence: what problem does the project solve?
-
-User: An inventory management system for small businesses.
-
-AI: Great. Who are the primary users, and what are the must-have features?
-
-User: Warehouse managers. Must-have: inbound/outbound inventory, inventory queries, alerts.
-
-AI: Got it. What is the primary language?
-
-User: Python
-
-AI: Python has no built-in template here, so I will generate configuration files...
-```
-
----
-
----
-
-## Post-init: Update README.md and AGENTS.md
-
-If `README.md` was not generated during Stage C, update `README.md` alongside `AGENTS.md` at the end of initialization. Use `init/project-blueprint.json` as the source of truth. Show a diff and request explicit approval before writing.
-
-After Stage C completion, if the user chooses to update the root `AGENTS.md`, follow these rules.
-
-### MUST Preserve (template repo structure)
-
-| Section | Reason |
-|---------|--------|
-| Key Directories table | Core navigation for LLM |
-| Routing table | Task-type dispatch |
-| Global Rules | Cross-cutting constraints |
-| `.ai/` reference | SSOT skills location |
-| `dev-docs/` reference | Complex task docs pattern |
-
-### MUST Add (project-specific info)
-
-| Section | Source | Format |
-|---------|--------|--------|
-| Replace template intro + Project Type body | `project.name` + `project.description` | One-line summary (no "template repo" wording) |
-| Tech Stack | `repo.language`, `repo.packageManager`, `repo.layout` | Table |
-| Capabilities | `capabilities.frontend`, `capabilities.backend`, `capabilities.database` | Enabled flags |
-| Key Directories | `repo.layout` + enabled capabilities | Update existing table |
-
-### Format Rules (LLM-friendly docs)
-
-1. **Semantic density**: One key fact per line; avoid filler text
-2. **Structured data**: Use tables for tech stack and directory mappings
-3. **Token efficiency**: Prefer abbreviations in tables (e.g., "TS" for TypeScript)
-4. **Scannable**: Keep sections short; use headers for navigation
-5. **Idempotent**: Update existing sections; do not create duplicates
-
-### Example: Updated AGENTS.md structure
-
-```markdown
-# AI Assistant Instructions
-
-## Project Type
-
-{{project.name}} - {{project.description}}
-
-## Tech Stack
-
-| Category | Value |
-|----------|-------|
-| Language | {{repo.language}} |
-| Package Manager | {{repo.packageManager}} |
-| Layout | {{repo.layout}} |
-| Frontend | {{capabilities.frontend.framework}} |
-| Backend | {{capabilities.backend.framework}} |
-
-## Key Directories
-
-| Directory | Purpose |
-|-----------|---------|
-| `src/` or `apps/` | Application code |
-| `.ai/` | Skills, scripts, LLM governance |
-| `dev-docs/` | Working documentation |
-
-## Routing
-
-[preserve original routing table]
-
-## Global Rules
-
-[preserve original global rules]
-```
-
----
-
-## References
-
-- `templates/llm-init-guide.md` - LLM guidance
-- `templates/conversation-prompts.md` - question bank
-- `templates/project-blueprint.schema.json` - blueprint JSON schema
-- `templates/project-blueprint.example.json` - full example
-- `templates/project-blueprint.min.example.json` - minimal example
-- `reference.md` - technical reference
+For full details, see `.ai/skills/features/context-awareness/feature-context-awareness/`.

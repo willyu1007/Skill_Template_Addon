@@ -1,21 +1,22 @@
 # Reference: initialize-project-from-requirements
 
-This reference describes the behavior of the init pipeline skill implementation (scripts + templates).
+This reference describes the behavior of the init pipeline implementation (scripts + templates).
 It is the SSOT; other references should link here.
 
 ---
 
 ## Key conclusions
 
-- Stage A quality is enforced by **structure + placeholders checks** (`check-docs`). It does not attempt deep semantic evaluation.
-- Stage B blueprint is the **machine-readable SSOT** used for Stage C scaffolding and skill pack selection.
+- Stage A quality is enforced by **structure + placeholder checks** (`check-docs`). It does not attempt deep semantic evaluation.
+- Stage B blueprint is the **machine-readable SSOT** used for Stage C scaffold/config generation and pack selection.
 - Pack selection is explicit:
   - declared in `init/project-blueprint.json` (`skills.packs`) during initialization
   - archived to `docs/project/project-blueprint.json` by `cleanup-init --archive`
   - materialized into `.ai/skills/_meta/sync-manifest.json` (flat schema)
   - synced into provider wrappers by `node .ai/scripts/sync-skills.cjs`
 - Stage transitions require explicit approval (`approve`), not manual state edits.
-- In add-on repos, pack enabling must go through `.ai/scripts/skillsctl.js` (scheme A) when available.
+- When `.ai/scripts/skillsctl.js` is available, pack enabling is performed through it; otherwise Stage C falls back to editing the sync manifest.
+- Optional **features** are materialized in Stage C from templates stored under `.ai/skills/features/...`.
 
 ---
 
@@ -24,7 +25,7 @@ It is the SSOT; other references should link here.
 Checks:
 - required files exist under `init/stage-a-docs/` by default (or `--docs-root`)
 - required headings exist
-- template placeholders (e.g. "TBD", "<fill>") are not left unresolved (warn or error depending on `--strict`)
+- template placeholders (e.g. `TBD`, `<fill>`) are not left unresolved (warn or error depending on `--strict`)
 
 Command:
 
@@ -36,7 +37,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 
 ## Stage A must-ask checklist (`mark-must-ask`)
 
-Use after asking each must-ask question to keep the state board accurate.
+Use after asking each must-ask question so the state board stays accurate.
 
 Keys:
 - `terminologyAlignment`
@@ -65,7 +66,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 
 Checks:
 - blueprint JSON parses
-- matches expected shape / schema (basic semantic sanity)
+- matches expected shape / schema (basic sanity)
 - optional: compute recommended packs from `capabilities`/`quality` and report deltas
 
 Command:
@@ -89,31 +90,32 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 ## Stage C apply (`apply`)
 
 `apply` performs:
+
 1. validate blueprint
 2. optional docs check (when `--require-stage-a`)
-3. scaffold directories/files (idempotent; "write-if-missing" for docs)
+3. scaffold directories/files (idempotent; mostly "write-if-missing")
 4. generate configs via `scripts/scaffold-configs.cjs` (SSOT)
-5. optional add-on setup (context awareness)
-6. enable packs (skillsctl when present; else manifest includePrefixes)
+5. materialize optional **features** from templates under `.ai/skills/features/.../templates/` and run their control scripts (`...ctl.js init`)
+6. enable packs (skillsctl when present; else sync manifest)
 7. sync wrappers via `.ai/scripts/sync-skills.cjs`
 
 Notes:
-- With `--verify-addons`, add-on verify failures are fail-fast by default.
-- Use `--non-blocking-addons` to continue despite verify failures.
+- With `--verify-features`, feature verify failures are **fail-fast** by default.
+- Use `--non-blocking-features` to continue despite verify failures.
 
 ---
 
-## Add-on: context awareness
+## Feature: context awareness
 
 Enable via blueprint:
-- `addons.contextAwareness: true`
 
-`context.*` is configuration only and does not trigger installation.
+- `features.contextAwareness: true`
+
+`context.*` is configuration only and does not trigger enabling by itself.
 
 Implications:
-- context awareness implies enabling the `context-core` pack
-- add-on payload is expected at `addons/context-awareness/payload/` (default)
+- Stage C materializes `docs/context/**` and environment templates, then runs `.ai/scripts/contextctl.js init`
+- Optional: add `context-core` to `skills.packs` if you want context-related scaffold skills/wrappers
 
 See:
-- `init/addon-docs/README.md`
-- `init/addon-docs/context-awareness.md`
+- `.ai/skills/features/context-awareness/feature-context-awareness/`

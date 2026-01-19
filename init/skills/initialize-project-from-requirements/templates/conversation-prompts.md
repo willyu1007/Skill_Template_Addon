@@ -80,7 +80,7 @@ Ask if `capabilities.database.enabled == true`.
   - `repo-prisma` (SSOT = `prisma/schema.prisma`; developers manage migrations)
   - `database` (SSOT = real DB; repo keeps mirrors via introspection)
 
-  → Write to Stage B: `db.ssot` and align `addons.dbMirror` accordingly.
+  → Write to Stage B: `db.ssot` and align `features.dbMirror` accordingly.
 - Backup / restore requirements
 
 Write to:
@@ -132,9 +132,9 @@ After completion (archived to):
 - Stage A docs → `docs/project/`
 - Blueprint → `docs/project/project-blueprint.json`
 
-## D. Add-on Decision Prompts (ask when determining capabilities)
+## D. Feature Decision Prompts (ask when determining capabilities)
 
-After understanding the project requirements, ask the following to determine which optional add-ons should be enabled:
+After understanding the project requirements, ask the following to determine which optional features should be enabled:
 
 ### D1. Context Management (context-awareness)
 
@@ -144,15 +144,15 @@ Ask if the project needs:
 - "Are there business process definitions (BPMN) that describe workflows?"
 - "Should LLM assistants have access to a central registry of project context artifacts?"
 
-→ If YES to any: Enable `addons.contextAwareness: true`
+→ If YES to any: Enable `features.contextAwareness: true`
 
 ### D2. Database Schema Management (SSOT choice + db-mirror)
 
 First decide the DB schema SSOT mode (MUST): `none` / `repo-prisma` / `database`.
 
 Then:
-- If SSOT is `database`: Enable `addons.dbMirror: true` (repo stores mirrors under `db/`).
-- Otherwise: Keep `addons.dbMirror: false`.
+- If SSOT is `database`: Enable `features.dbMirror: true` (repo stores mirrors under `db/`).
+- Otherwise: Keep `features.dbMirror: false`.
 
 ### D3. Container/Artifact Packaging (packaging)
 
@@ -161,7 +161,7 @@ Ask if:
 - "Are there other artifacts to package (CLI binaries, libraries)?"
 - "What target platforms/architectures?"
 
-→ If YES: Enable `addons.packaging: true`
+→ If YES: Enable `features.packaging: true`
 
 ### D4. Multi-Environment Deployment (deployment)
 
@@ -170,7 +170,7 @@ Ask if:
 - "What deployment model? (K8s, VM, serverless, static)"
 - "Are there rollback requirements?"
 
-→ If YES: Enable `addons.deployment: true`
+→ If YES: Enable `features.deployment: true`
 
 ### D5. Release/Version Management (release)
 
@@ -179,7 +179,7 @@ Ask if:
 - "What versioning strategy? (semantic, calendar, custom)"
 - "Are there release approval workflows?"
 
-→ If YES: Enable `addons.release: true`
+→ If YES: Enable `features.release: true`
 
 ### D6. Observability Contracts (observability)
 
@@ -188,10 +188,10 @@ Ask if:
 - "Are there logging schema requirements?"
 - "Is distributed tracing needed?"
 
-→ If YES: Enable `addons.observability: true`
+→ If YES: Enable `features.observability: true`
 
-Write add-on decisions to:
-- Stage B: `addons.*` section in `init/project-blueprint.json`
+Write feature decisions to:
+- Stage B: `features.*` section in `init/project-blueprint.json`
 
 ## E. Technology Stack Selection
 

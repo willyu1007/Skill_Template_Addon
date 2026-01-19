@@ -1,14 +1,14 @@
 # Stage C: Scaffold + configs + skills
 
-> **SSOT**: For the complete command reference, see `init/skills/initialize-project-from-requirements/SKILL.md`.
+> **SSOT**: For the full command reference, see `init/skills/initialize-project-from-requirements/SKILL.md`.
 
 Stage C applies the blueprint to the repository:
 
 - create minimal directory scaffold
 - generate configuration files (SSOT: `init/skills/initialize-project-from-requirements/scripts/scaffold-configs.cjs`)
-- enable skill packs (manifest / skillsctl scheme A)
+- enable skill packs (prefers `skillsctl` when available)
 - sync provider wrappers (`.ai/scripts/sync-skills.cjs`)
-- optionally install/initialize add-ons (context awareness, db-mirror, packaging, deployment, release, observability)
+- materialize/initialize optional features (context awareness, db mirror, packaging, deployment, release, observability)
 - optionally create DevOps convention scaffold (`ops/`)
 
 ---
@@ -30,7 +30,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
   --apply
 ```
 
-Note: `scaffold` only creates directories/placeholders. It does not generate configs, enable packs, or sync wrappers.
+Note: `scaffold` only creates directories/placeholders. It does not generate configs, enable packs, sync wrappers, or materialize features.
 
 ---
 
@@ -50,10 +50,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 2. Optionally validates Stage A docs (when `--require-stage-a` is set)
 3. Applies scaffold (idempotent; "write-if-missing" for docs)
 4. Generates config files via `init/skills/initialize-project-from-requirements/scripts/scaffold-configs.cjs`
-5. If context awareness is enabled in the blueprint:
-   - installs missing add-on payload files from `addons/context-awareness/payload/` (copy-if-missing)
-   - runs `.ai/scripts/contextctl.js init`
-   - runs `.ai/scripts/projectctl.js init` and `set-context-mode` (if projectctl exists)
+5. Materializes enabled features by copying templates from `.ai/skills/features/**/templates/` and running the corresponding control scripts under `.ai/scripts/`.
 6. Enables skill packs:
    - If `.ai/scripts/skillsctl.js` exists: **scheme A** (packs enabled via skillsctl)
    - Else: additive update of `.ai/skills/_meta/sync-manifest.json` includePrefixes
@@ -79,8 +76,6 @@ After reviewing the resulting scaffold/configs/skills changes, record approval a
 ```bash
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs approve --stage C --repo-root .
 ```
-
-Note: in an interactive shell, the approve step will ask whether to keep the `addons/` directory; choosing to clean will delete the add-on payloads under `addons/` (installed project files remain).
 
 Optional: remove `init/` bootstrap kit after completion:
 

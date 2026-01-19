@@ -50,21 +50,21 @@ node .ai/scripts/sync-skills.cjs --scope current --providers both --mode reset -
 - Documentation standard: `.ai/skills/standards/documentation-guidelines/SKILL.md`
 
 
-## Optional add-ons (addon template)
+## Optional features (no-addon template)
 
-This template includes opt-in add-ons under `addons/` (kept out of the default paths until enabled).
+This template does **not** ship an `addons/` directory. Optional features are materialized during init **Stage C** based on `init/project-blueprint.json`:
 
-- `addons/context-awareness/` provides a context layer (`docs/context/`) and scripts that force all context updates through reproducible commands.
+- Feature toggles: `features.*` (see `init/feature-docs/README.md`)
+- Assets live under `.ai/skills/features/**/templates` and `.ai/scripts/*ctl.js`
+- Stage C `apply` copies templates (copy-if-missing by default) and runs `*ctl.js init`
 
-Enable via `init/project-blueprint.json`:
+Example:
 
 ```json
 {
-  "addons": { "contextAwareness": true },
+  "features": { "contextAwareness": true },
   "context": { "mode": "contract" }
 }
 ```
 
-`context.*` is optional configuration and does not trigger installation.
-
-Then run Stage C (`init/.../init-pipeline.cjs apply`).
+`context.*` is configuration only and does not enable the feature by itself.

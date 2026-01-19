@@ -1,0 +1,62 @@
+# Feature: packaging
+
+## Conclusions (read first)
+
+- Provides container/artifact packaging infrastructure under `ops/packaging/`
+- Adds registry/config docs under `docs/packaging/`
+- Designed so AI can propose changes and humans can execute builds safely
+
+## How to enable
+
+In `init/project-blueprint.json`:
+
+```json
+{
+  "features": {
+    "packaging": true
+  },
+  "packaging": {
+    "enabled": true,
+    "containerize": true,
+    "targets": ["services", "jobs"]
+  }
+}
+```
+
+## What Stage C `apply` does
+
+When enabled, Stage C:
+
+1) Copies templates from:
+- `.ai/skills/features/packaging/feature-packaging/templates/`
+
+2) Runs the controller:
+
+```bash
+node .ai/scripts/packctl.js init --repo-root .
+```
+
+3) Optional verification (when Stage C is run with `--verify-features`):
+
+```bash
+node .ai/scripts/packctl.js verify --repo-root .
+```
+
+## Key outputs
+
+- `ops/packaging/**` (targets + scripts + workdocs)
+- `docs/packaging/**` (registry + docs)
+
+## Common commands
+
+```bash
+# Add a service packaging target
+node .ai/scripts/packctl.js add-service --id api --module apps/backend
+
+# Add a job packaging target
+node .ai/scripts/packctl.js add-job --id cron-task
+
+# List packaging targets
+node .ai/scripts/packctl.js list
+```
+

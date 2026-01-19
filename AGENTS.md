@@ -1,6 +1,6 @@
 # AI Assistant Instructions
 
-This is an **AI-Friendly Repository Template** - a starter kit for creating LLM-optimized codebases with optional add-ons.
+This is an **AI-Friendly Repository Template** - a starter kit for creating LLM-optimized codebases with optional features (no `addons/` directory).
 
 ## Project Type
 
@@ -11,7 +11,7 @@ Template repository. Users clone this to start new AI-friendly projects.
 | Directory | Purpose | Entry Point |
 |-----------|---------|-------------|
 | `init/` | Project initialization | `init/AGENTS.md` |
-| `addons/` | Optional add-on payloads | `addons/AGENTS.md` |
+| `init/feature-docs/` | Optional feature documentation | `init/feature-docs/README.md` |
 | `.ai/` | Skills, scripts, LLM governance | `.ai/AGENTS.md` |
 | `dev-docs/` | Complex task documentation | `dev-docs/AGENTS.md` |
 | `.codex/` | Codex skill stubs (generated) | - |

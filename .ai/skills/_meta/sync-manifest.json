@@ -1,6 +1,14 @@
 {
   "version": 1,
-  "includePrefixes": ["workflows/", "standards/"],
+  "includePrefixes": [
+    "workflows/",
+    "standards/",
+    "scaffold/",
+    "backend/",
+    "frontend/",
+    "testing/",
+    "features/"
+  ],
   "includeSkills": [],
   "excludeSkills": []
 }

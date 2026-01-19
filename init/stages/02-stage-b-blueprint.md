@@ -104,20 +104,24 @@ If you're using an AI assistant to guide initialization, refer to:
 
 ---
 
-## Add-on flags (optional)
 
-If you want to enable the context-awareness add-on, set:
-- `addons.contextAwareness: true`
+## Feature flags (optional)
 
-Optional:
+Feature flags are configured in the blueprint under `features`.
+
+To enable Context Awareness, set:
+
+- `features.contextAwareness: true`
+
+Optional configuration:
+
 - `context.mode: "contract" | "snapshot"` (default: `contract`)
 
-`context.*` is configuration only and does not trigger installation.
+`context.*` is configuration only and does not trigger enabling by itself.
 
-Note: Stage C `apply` will attempt to install the add-on payload from:
-- `addons/context-awareness/payload/` (default; can be overridden via `apply --addons-root`)
+Note: Stage C `apply` will materialize feature templates from `.ai/skills/features/.../templates/` and run the corresponding control scripts under `.ai/scripts/...`.
 
-Other add-ons are also supported (db-mirror, packaging, deployment, release, observability). See `init/README.md`.
+Other supported features: `dbMirror`, `packaging`, `deployment`, `release`, `observability` (some features have dependencies; for example Observability requires Context Awareness). See `init/README.md`.
 
 ---
 

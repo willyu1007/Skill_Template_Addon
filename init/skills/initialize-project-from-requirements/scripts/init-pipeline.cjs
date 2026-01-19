@@ -18,7 +18,7 @@
  *   - mark-must-ask  Update Stage A must-ask checklist state
  *   - review-packs   Mark Stage B packs review as completed
  *   - suggest-packs  Recommend skill packs from blueprint capabilities (warn-only by default)
- *   - suggest-addons Recommend add-ons from blueprint capabilities
+ *   - suggest-features Recommend features from blueprint capabilities
  *   - scaffold       Plan or apply a minimal directory scaffold from the blueprint
  *   - apply          validate + (optional) check-docs + scaffold + configs + pack enable + wrapper sync
  *   - cleanup-init   Remove the `init/` bootstrap kit (opt-in, guarded)
@@ -53,7 +53,6 @@ Commands:
     --repo-root <path>          Repo root (default: cwd)
     --stage <A|B|C>             Stage to approve (default: current state.stage)
     --note <text>               Optional audit note
-    --addons-root <path>        Add-ons directory (default: addons) (Stage C only)
     Record explicit user approval and advance state to the next stage.
 
   validate
@@ -82,42 +81,41 @@ Commands:
     --blueprint <path>          Blueprint JSON path (default: init/project-blueprint.json)
     --repo-root <path>          Repo root (default: cwd)
     --format <text|json>        Output format (default: text)
-    --write                      Add missing recommended packs into blueprint (safe-add only)
+    --write                     Add missing recommended packs into blueprint (safe-add only)
 
-  suggest-addons
+  suggest-features
     --blueprint <path>          Blueprint JSON path (default: init/project-blueprint.json)
     --repo-root <path>          Repo root (default: cwd)
     --format <text|json>        Output format (default: text)
-    --write                      Add missing recommended add-ons into blueprint (safe-add only)
+    --write                     Add missing recommended features into blueprint (safe-add only)
 
   scaffold
     --blueprint <path>          Blueprint JSON path (default: init/project-blueprint.json)
     --repo-root <path>          Repo root (default: cwd)
-    --apply                      Actually create directories/files (default: dry-run)
+    --apply                     Actually create directories/files (default: dry-run)
 
   apply
     --blueprint <path>          Blueprint JSON path (default: init/project-blueprint.json)
     --repo-root <path>          Repo root (default: cwd)
     --providers <both|codex|claude|codex,claude>
-    --addons-root <path>        Add-ons directory (default: addons)
     --require-stage-a           Refuse apply if Stage A docs invalid
     --skip-configs              Do not generate config files
     --cleanup-init              Run cleanup-init after apply
-    --cleanup-addons            Also prune unused add-ons (requires --cleanup-init)
-    --force-addons              Force reinstall add-ons (overwrite existing)
-    --verify-addons             Run verify after add-on installation
-    --non-blocking-addons       Continue on add-on errors (default: fail-fast)
+
+    Feature install controls:
+    --force-features            Overwrite existing feature files when materializing templates
+    --verify-features           Run feature verify commands after installation (when available)
+    --non-blocking-features     Continue on feature errors (default: fail-fast)
+
     --format <text|json>        Output format (default: text)
 
   cleanup-init
     --repo-root <path>          Repo root (default: cwd)
-    --apply                      Actually remove init/ (default: dry-run)
+    --apply                     Actually remove init/ (default: dry-run)
     --i-understand              Required acknowledgement (refuses without it)
     --archive                   Archive all (Stage A docs + blueprint) to docs/project/
     --archive-docs              Archive Stage A docs only to docs/project/
     --archive-blueprint         Archive blueprint only to docs/project/
-    --cleanup-addons            Also remove unused add-on directories from addons/
-    --addons-root <path>        Add-ons directory (default: addons)
 
 Examples:
   node .../init-pipeline.cjs start
@@ -139,7 +137,7 @@ function die(msg, exitCode = 1) {
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  if (args.length === 0 || args[0] === '-h' || args[0] === '--help') usage(0);
+  if (args.length === 0 || args[0] === 'help' || args[0] === '-h' || args[0] === '--help') usage(0);
 
   const command = args.shift();
   const opts = {};
@@ -239,34 +237,6 @@ function removeDirRecursive(dirPath) {
   } catch (e) {
     return { ok: false, error: e.message };
   }
-}
-
-function maybePromptRemoveAddonsDir(repoRoot, addonsRoot) {
-  const candidate = path.isAbsolute(addonsRoot) ? addonsRoot : path.join(repoRoot, addonsRoot);
-  const addonsDir = path.resolve(candidate);
-  ensurePathWithinRepo(repoRoot, addonsDir, 'addons-root');
-
-  if (!fs.existsSync(addonsDir)) {
-    return { mode: 'skip', reason: 'not-found', path: addonsDir };
-  }
-  if (!isInteractiveTty()) {
-    return { mode: 'skip', reason: 'non-interactive', path: addonsDir };
-  }
-
-  console.log('\n== Optional Cleanup: Add-ons Payloads ==\n');
-  console.log(`Add-ons payload directory: ${path.relative(repoRoot, addonsDir)}`);
-  console.log('- These are template payloads used to install optional add-ons later.');
-  console.log('- Installed project files (e.g. docs/context/, .ai/scripts/*) will remain.\n');
-
-  const keep = promptYesNoSync('Keep the add-ons payload directory?', true);
-  if (keep) return { mode: 'kept', path: addonsDir };
-
-  const confirm = promptYesNoSync(`Remove ${path.relative(repoRoot, addonsDir)} now?`, false);
-  if (!confirm) return { mode: 'kept', reason: 'canceled', path: addonsDir };
-
-  const res = removeDirRecursive(addonsDir);
-  if (!res.ok) return { mode: 'failed', path: addonsDir, error: res.error };
-  return { mode: 'removed', path: addonsDir };
 }
 
 // ============================================================================
@@ -475,6 +445,7 @@ function packPrefixMap() {
   return {
     workflows: 'workflows/',
     standards: 'standards/',
+    testing: 'testing/',
     backend: 'backend/',
     frontend: 'frontend/'
   };
@@ -482,7 +453,7 @@ function packPrefixMap() {
 
 function packOrder() {
   // Base packs available in template (matches .ai/skills/_meta/packs/)
-  return ['workflows', 'standards', 'backend', 'frontend'];
+  return ['workflows', 'standards', 'testing', 'backend', 'frontend'];
 }
 
 function normalizePackList(packs) {
@@ -513,6 +484,16 @@ function validateBlueprint(blueprint) {
 
   if (!Number.isInteger(blueprint.version) || blueprint.version < 1) {
     errors.push('Blueprint.version must be an integer >= 1.');
+  }
+
+  // Feature flags
+  if (blueprint.features !== undefined) {
+    if (blueprint.features === null || Array.isArray(blueprint.features) || typeof blueprint.features !== 'object') {
+      errors.push('features must be an object when present.');
+    }
+  }
+  if (blueprint.addons !== undefined) {
+    errors.push('addons is not supported. Use features.* instead.');
   }
 
   const project = blueprint.project || {};
@@ -553,10 +534,15 @@ function validateBlueprint(blueprint) {
 
   const dbMirrorEnabled = isDbMirrorEnabled(blueprint);
   if (db.ssot === 'database' && !dbMirrorEnabled) {
-    errors.push('db.ssot=database requires addons.dbMirror=true (db-mirror add-on).');
+    errors.push('db.ssot=database requires features.dbMirror=true (DB Mirror feature).');
   }
   if (db.ssot !== 'database' && dbMirrorEnabled) {
-    errors.push('addons.dbMirror=true is only valid when db.ssot=database.');
+    errors.push('features.dbMirror=true is only valid when db.ssot=database.');
+  }
+
+  // Feature dependencies
+  if (isObservabilityEnabled(blueprint) && !isContextAwarenessEnabled(blueprint)) {
+    errors.push('features.observability=true requires features.contextAwareness=true (observability contracts live under docs/context/).');
   }
 
   if ((caps.database && caps.database.enabled) && db.ssot === 'none') {
@@ -576,19 +562,19 @@ function validateBlueprint(blueprint) {
   return { ok, errors, warnings, packs };
 }
 
-function isContextAwarenessEnabled(blueprint) {
-  if (!blueprint || typeof blueprint !== 'object') return false;
-  const addons = blueprint.addons || {};
-  // Only addons.* triggers installation; context.* is configuration only
-  const v =
-    addons.contextAwareness ??
-    addons.context_awareness ??
-    addons['context-awareness'] ??
-    addons['contextAwareness'] ??
-    addons['context_awareness'];
-
-  return v === true;
+function featureFlags(blueprint) {
+  if (!blueprint || typeof blueprint !== 'object') return {};
+  const features = blueprint.features;
+  if (!features || Array.isArray(features) || typeof features !== 'object') return {};
+  return features;
 }
+
+function isContextAwarenessEnabled(blueprint) {
+  const flags = featureFlags(blueprint);
+  // Only feature flags trigger materialization; context.* is configuration only
+  return flags.contextAwareness === true;
+}
+
 
 function recommendedPacksFromBlueprint(blueprint) {
   const rec = new Set(['workflows', 'standards']);
@@ -607,7 +593,7 @@ function recommendedPacksFromBlueprint(blueprint) {
   return ordered;
 }
 
-function recommendedAddonsFromBlueprint(blueprint) {
+function recommendedFeaturesFromBlueprint(blueprint) {
   const rec = [];
   const caps = blueprint.capabilities || {};
   const q = blueprint.quality || {};
@@ -619,11 +605,11 @@ function recommendedAddonsFromBlueprint(blueprint) {
     (caps.api && (caps.api.enabled || (caps.api.style && caps.api.style !== 'none'))) ||
     (caps.database && caps.database.enabled) ||
     (caps.bpmn && caps.bpmn.enabled);
-  if (needsContext) rec.push('context-awareness');
+  if (needsContext) rec.push('contextAwareness');
 
   // db-mirror: enabled only when DB SSOT is the real database
   const db = blueprint.db || {};
-  if (db.ssot === 'database') rec.push('db-mirror');
+  if (db.ssot === 'database') rec.push('dbMirror');
 
   // packaging: enabled when containerization/packaging is configured
   const packagingEnabled =
@@ -650,12 +636,11 @@ function recommendedAddonsFromBlueprint(blueprint) {
   return rec;
 }
 
-function getEnabledAddons(blueprint) {
-  const addons = blueprint.addons || {};
+function getEnabledFeatures(blueprint) {
   const enabled = [];
   
-  if (isContextAwarenessEnabled(blueprint)) enabled.push('context-awareness');
-  if (isDbMirrorEnabled(blueprint)) enabled.push('db-mirror');
+  if (isContextAwarenessEnabled(blueprint)) enabled.push('contextAwareness');
+  if (isDbMirrorEnabled(blueprint)) enabled.push('dbMirror');
   if (isPackagingEnabled(blueprint)) enabled.push('packaging');
   if (isDeploymentEnabled(blueprint)) enabled.push('deployment');
   if (isReleaseEnabled(blueprint)) enabled.push('release');
@@ -997,12 +982,13 @@ function copyDirIfMissing(srcDir, destDir, apply, force = false) {
   return { ok: true, actions };
 }
 
-function findAddonPayloadDir(repoRoot, addonsRoot, addonId) {
+function findFeatureTemplatesDir(repoRoot, featureId) {
+  const id = String(featureId || '');
+  const dash = id.replace(/_/g, '-');
   const candidates = [
-    path.join(repoRoot, addonsRoot, addonId, 'payload'),
-    // common fallbacks
-    path.join(repoRoot, addonsRoot, addonId.replace(/-/g, '_'), 'payload'),
-    path.join(repoRoot, addonsRoot, addonId.replace(/_/g, '-'), 'payload'),
+    path.join(repoRoot, '.ai', 'skills', 'features', dash, 'feature-' + dash, 'templates'),
+    // fallbacks
+    path.join(repoRoot, '.ai', 'skills', 'features', dash.replace(/-/g, '_'), 'feature-' + dash.replace(/-/g, '_'), 'templates'),
   ];
   for (const p of candidates) {
     if (fs.existsSync(p) && fs.statSync(p).isDirectory()) return p;
@@ -1027,7 +1013,7 @@ function runNodeScriptWithRepoRootFallback(repoRoot, scriptPath, args, apply) {
   if (!apply) return first;
 
   if (first && first.mode === 'failed' && args.includes('--repo-root')) {
-    // Some add-on scripts may not accept --repo-root; retry without it (cwd is already repoRoot).
+    // Some scripts may not accept --repo-root; retry without it (cwd is already repoRoot).
     const altArgs = [];
     for (let i = 0; i < args.length; i++) {
       if (args[i] === '--repo-root') {
@@ -1227,7 +1213,7 @@ function applyDbSsotSkillExclusions(repoRoot, blueprint, apply) {
   return { op: 'edit', path: manifestPath, mode: 'applied', note: `excludeSkills += ${desired.join(', ')}` };
 }
 
-function refreshDbContextContract(repoRoot, blueprint, apply, verifyAddons) {
+function refreshDbContextContract(repoRoot, blueprint, apply, verifyFeatures) {
   const outPath = path.join(repoRoot, 'docs', 'context', 'db', 'schema.json');
 
   // Only meaningful when context-awareness exists (contract directory + registry).
@@ -1236,7 +1222,7 @@ function refreshDbContextContract(repoRoot, blueprint, apply, verifyAddons) {
       op: 'skip',
       path: outPath,
       mode: apply ? 'skipped' : 'dry-run',
-      reason: 'context-awareness add-on not enabled'
+      reason: 'context-awareness feature not enabled'
     };
   }
 
@@ -1253,7 +1239,7 @@ function refreshDbContextContract(repoRoot, blueprint, apply, verifyAddons) {
   const run1 = runNodeScript(repoRoot, dbSsotCtl, ['sync-to-context', '--repo-root', repoRoot], apply);
   const actions = [run1];
 
-  if (verifyAddons) {
+  if (verifyFeatures && apply) {
     const contextCtl = path.join(repoRoot, '.ai', 'scripts', 'contextctl.js');
     if (fs.existsSync(contextCtl)) {
       actions.push(runNodeScriptWithRepoRootFallback(repoRoot, contextCtl, ['verify', '--repo-root', repoRoot], apply));
@@ -1265,141 +1251,160 @@ function refreshDbContextContract(repoRoot, blueprint, apply, verifyAddons) {
 
 
 // ============================================================================
-// Add-on Detection Functions
+// Feature Detection Functions
 // ============================================================================
 
 function isDbMirrorEnabled(blueprint) {
-  if (!blueprint || typeof blueprint !== 'object') return false;
-  const addons = blueprint.addons || {};
-  // Only addons.* triggers installation; db.* is configuration only
-  return addons.dbMirror === true || addons['db-mirror'] === true;
+  const flags = featureFlags(blueprint);
+  // Only feature flags trigger materialization; db.* is configuration only
+  return flags.dbMirror === true;
 }
 
 function isPackagingEnabled(blueprint) {
-  if (!blueprint || typeof blueprint !== 'object') return false;
-  const addons = blueprint.addons || {};
-  // Only addons.* triggers installation; packaging.* is configuration only
-  return addons.packaging === true;
+  const flags = featureFlags(blueprint);
+  // Only feature flags trigger materialization; packaging.* is configuration only
+  return flags.packaging === true;
 }
 
 function isDeploymentEnabled(blueprint) {
-  if (!blueprint || typeof blueprint !== 'object') return false;
-  const addons = blueprint.addons || {};
-  // Only addons.* triggers installation; deploy.* is configuration only
-  return addons.deployment === true;
+  const flags = featureFlags(blueprint);
+  // Only feature flags trigger materialization; deploy.* is configuration only
+  return flags.deployment === true;
 }
 
 function isReleaseEnabled(blueprint) {
-  if (!blueprint || typeof blueprint !== 'object') return false;
-  const addons = blueprint.addons || {};
-  // Only addons.* triggers installation; release.* is configuration only
-  return addons.release === true;
+  const flags = featureFlags(blueprint);
+  // Only feature flags trigger materialization; release.* is configuration only
+  return flags.release === true;
 }
 
 function isObservabilityEnabled(blueprint) {
-  if (!blueprint || typeof blueprint !== 'object') return false;
-  const addons = blueprint.addons || {};
-  // Only addons.* triggers installation; observability.* is configuration only
-  return addons.observability === true;
+  const flags = featureFlags(blueprint);
+  // Only feature flags trigger materialization; observability.* is configuration only
+  return flags.observability === true;
 }
 
 // ============================================================================
-// Generic Add-on Installer
+// Feature Materialization (templates + ctl scripts)
 // ============================================================================
 
-function ensureAddon(repoRoot, addonId, addonsRoot, apply, ctlScriptName, options = {}) {
-  const { force = false, verify = false } = options;
-  const result = { addonId, op: 'ensure', actions: [], warnings: [], errors: [] };
+function ensureFeature(repoRoot, featureId, apply, ctlScriptName, options = {}) {
+  const { force = false, verify = false, stateKey } = options;
+  const result = { featureId, op: 'ensure', actions: [], warnings: [], errors: [] };
 
-  // Determine the control script name (e.g., dbctl.js, packctl.js)
-  const ctlName = ctlScriptName || `${addonId.replace(/-/g, '')}ctl.js`;
-  const ctlPath = path.join(repoRoot, '.ai', 'scripts', ctlName);
-
-  // If control script already exists and not force, just re-initialize (idempotent)
-  const needsInstall = !fs.existsSync(ctlPath) || force;
-  if (needsInstall) {
-    const payloadDir = findAddonPayloadDir(repoRoot, addonsRoot, addonId);
-    if (!payloadDir) {
-      result.warnings.push(`Add-on "${addonId}" is enabled but payload not found. Expected: ${path.join(addonsRoot, addonId, 'payload')}`);
-      return result;
-    }
-
-    const copyRes = copyDirIfMissing(payloadDir, repoRoot, apply, force);
-    if (!copyRes.ok) {
-      result.errors.push(copyRes.error || `Failed to copy add-on "${addonId}" payload.`);
-      return result;
-    }
-    result.actions.push({ op: force ? 'reinstall-addon' : 'install-addon', addonId, from: payloadDir, to: repoRoot, mode: apply ? 'applied' : 'dry-run' });
-    result.actions.push(...copyRes.actions);
+  const templatesDir = findFeatureTemplatesDir(repoRoot, featureId);
+  if (!templatesDir) {
+    result.errors.push(
+      `Feature "${featureId}" is enabled but templates were not found. Expected: .ai/skills/features/${featureId}/feature-${featureId}/templates/`
+    );
+    return result;
   }
 
-  // Run init command if control script exists
-  if (fs.existsSync(ctlPath)) {
-    result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, ctlPath, ['init', '--repo-root', repoRoot], apply));
-    
-    // Run verify if requested
-    if (verify && apply) {
-      const verifyRes = runNodeScriptWithRepoRootFallback(repoRoot, ctlPath, ['verify', '--repo-root', repoRoot], apply);
-      result.actions.push(verifyRes);
-      if (verifyRes.mode === 'failed') {
-        result.verifyFailed = true;
-        result.verifyError = `Add-on "${addonId}" verify failed`;
+  const copyRes = copyDirIfMissing(templatesDir, repoRoot, apply, force);
+  if (!copyRes.ok) {
+    result.errors.push(copyRes.error || `Failed to copy templates for feature "${featureId}".`);
+    return result;
+  }
+  result.actions.push({
+    op: force ? 'reinstall-feature' : 'install-feature',
+    featureId,
+    from: templatesDir,
+    to: repoRoot,
+    mode: apply ? 'applied' : 'dry-run'
+  });
+  result.actions.push(...copyRes.actions);
+
+  // Mark feature enabled in project state (best-effort)
+  const projectctl = path.join(repoRoot, '.ai', 'scripts', 'projectctl.js');
+  if (fs.existsSync(projectctl)) {
+    const key = stateKey || featureId;
+    result.actions.push(
+      runNodeScriptWithRepoRootFallback(repoRoot, projectctl, ['set', `features.${key}`, 'true', '--repo-root', repoRoot], apply)
+    );
+  } else {
+    result.warnings.push('projectctl.js not found; skipping .ai/project feature flag update.');
+  }
+
+  // Optional: run feature controller init/verify (best-effort)
+  if (ctlScriptName) {
+    const ctlPath = path.join(repoRoot, '.ai', 'scripts', ctlScriptName);
+    if (fs.existsSync(ctlPath)) {
+      result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, ctlPath, ['init', '--repo-root', repoRoot], apply));
+      if (verify && apply) {
+        const verifyRes = runNodeScriptWithRepoRootFallback(repoRoot, ctlPath, ['verify', '--repo-root', repoRoot], apply);
+        result.actions.push(verifyRes);
+        if (verifyRes.mode === 'failed') {
+          result.verifyFailed = true;
+          result.verifyError = `Feature "${featureId}" verify failed`;
+        }
       }
+    } else if (apply) {
+      result.errors.push(`Feature "${featureId}" control script not found: .ai/scripts/${ctlScriptName}`);
     }
-  } else if (apply) {
-    result.warnings.push(`Add-on "${addonId}" control script not found after install: ${ctlName}`);
   }
 
   return result;
 }
 
-function ensureContextAwarenessAddon(repoRoot, blueprint, addonsRoot, apply, options = {}) {
+function ensureContextAwarenessFeature(repoRoot, blueprint, apply, options = {}) {
   const { force = false, verify = false } = options;
   const enabled = isContextAwarenessEnabled(blueprint);
-  const result = { enabled, op: enabled ? 'ensure' : 'skip', actions: [], warnings: [], errors: [] };
+  const result = {
+    enabled,
+    featureId: 'context-awareness',
+    op: enabled ? 'ensure' : 'skip',
+    actions: [],
+    warnings: [],
+    errors: []
+  };
 
   if (!enabled) return result;
 
-  // If already installed and not force, just (re-)initialize skeleton (idempotent)
-  const contextctl = path.join(repoRoot, '.ai', 'scripts', 'contextctl.js');
-  const projectctl = path.join(repoRoot, '.ai', 'scripts', 'projectctl.js');
-
-  const needsInstall = !fs.existsSync(contextctl) || force;
-  if (needsInstall) {
-    const payloadDir = findAddonPayloadDir(repoRoot, addonsRoot, 'context-awareness');
-    if (!payloadDir) {
-      result.errors.push(`Context awareness is enabled, but add-on payload is not found. Expected: ${path.join(addonsRoot, 'context-awareness', 'payload')}`);
-      return result;
-    }
-
-    const copyRes = copyDirIfMissing(payloadDir, repoRoot, apply, force);
-    if (!copyRes.ok) {
-      result.errors.push(copyRes.error || 'Failed to copy add-on payload.');
-      return result;
-    }
-    result.actions.push({ op: force ? 'reinstall-addon' : 'install-addon', from: payloadDir, to: repoRoot, mode: apply ? 'applied' : 'dry-run' });
-    result.actions.push(...copyRes.actions);
-  }
-
-  if (!fs.existsSync(contextctl)) {
-    result.errors.push(`Context awareness payload did not provide .ai/scripts/contextctl.js (missing after install).`);
+  const templatesDir = findFeatureTemplatesDir(repoRoot, 'context-awareness');
+  if (!templatesDir) {
+    result.errors.push('Context awareness is enabled, but feature templates were not found.');
     return result;
   }
 
-  // Initialize docs/context skeleton (idempotent)
-  result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, contextctl, ['init', '--repo-root', repoRoot].concat(apply ? [] : ['--dry-run']), apply));
+  const copyRes = copyDirIfMissing(templatesDir, repoRoot, apply, force);
+  if (!copyRes.ok) {
+    result.errors.push(copyRes.error || 'Failed to copy context-awareness templates.');
+    return result;
+  }
 
-  // Initialize project state if projectctl exists (optional)
+  result.actions.push({
+    op: force ? 'reinstall-feature' : 'install-feature',
+    featureId: 'context-awareness',
+    from: templatesDir,
+    to: repoRoot,
+    mode: apply ? 'applied' : 'dry-run'
+  });
+  result.actions.push(...copyRes.actions);
+
+  const contextctl = path.join(repoRoot, '.ai', 'scripts', 'contextctl.js');
+  const projectctl = path.join(repoRoot, '.ai', 'scripts', 'projectctl.js');
+
+  if (!fs.existsSync(contextctl)) {
+    result.errors.push('contextctl.js not found under .ai/scripts.');
+    return result;
+  }
+
+  // Ensure project state exists and mark flags
   if (fs.existsSync(projectctl)) {
-    result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, projectctl, ['init', '--repo-root', repoRoot].concat(apply ? [] : ['--dry-run']), apply));
+    result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, projectctl, ['init', '--repo-root', repoRoot], apply));
+    result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, projectctl, ['set', 'features.contextAwareness', 'true', '--repo-root', repoRoot], apply));
+    result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, projectctl, ['set', 'context.enabled', 'true', '--repo-root', repoRoot], apply));
     const mode = getContextMode(blueprint);
-    result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, projectctl, ['set-context-mode', mode, '--repo-root', repoRoot].concat(apply ? [] : ['--dry-run']), apply));
+    result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, projectctl, ['set-context-mode', mode, '--repo-root', repoRoot], apply));
   } else {
     result.warnings.push('projectctl.js not found; skipping project state initialization.');
   }
 
-  // Run verify if requested
-  if (verify && apply && fs.existsSync(contextctl)) {
+  // Initialize docs/context skeleton and registry (idempotent)
+  result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, contextctl, ['init', '--repo-root', repoRoot], apply));
+
+  // Optional verify
+  if (verify && apply) {
     const verifyRes = runNodeScriptWithRepoRootFallback(repoRoot, contextctl, ['verify', '--repo-root', repoRoot], apply);
     result.actions.push(verifyRes);
     if (verifyRes.mode === 'failed') {
@@ -1410,7 +1415,6 @@ function ensureContextAwarenessAddon(repoRoot, blueprint, addonsRoot, apply, opt
 
   return result;
 }
-
 
 
 function planScaffold(repoRoot, blueprint, apply) {
@@ -1647,8 +1651,8 @@ process.exit(0);
 }
 
 function updateManifest(repoRoot, blueprint, apply) {
-  // In add-on repos, pack switching MUST go through .ai/scripts/skillsctl.js (scheme A).
-  // In non-add-on repos, fall back to a flat sync-manifest.json update (additive; never removes).
+  // When skillsctl is available, pack switching should go through .ai/scripts/skillsctl.js (scheme A).
+  // When skillsctl is not available, fall back to a flat sync-manifest.json update (additive; never removes).
   const manifestPath = path.join(repoRoot, '.ai', 'skills', '_meta', 'sync-manifest.json');
   const skillsctlPath = path.join(repoRoot, '.ai', 'scripts', 'skillsctl.js');
 
@@ -1658,8 +1662,7 @@ function updateManifest(repoRoot, blueprint, apply) {
   const packsFromBlueprint = normalizePackList((blueprint.skills && blueprint.skills.packs) || []);
   const packs = new Set(packsFromBlueprint);
 
-  // Note: context-core is NOT available in this template variant.
-  // The context-awareness addon provides docs/context infrastructure, not skills.
+  // Note: packs are optional; features and packs are independent toggles.
 
   const packList = Array.from(packs);
 
@@ -1667,7 +1670,7 @@ function updateManifest(repoRoot, blueprint, apply) {
     return { op: 'skip', path: manifestPath, mode: apply ? 'applied' : 'dry-run', warnings, note: 'no packs requested' };
   }
 
-  // Prefer skillsctl if available (add-on mode)
+  // Prefer skillsctl if available
   if (fs.existsSync(skillsctlPath)) {
     // Preflight: ensure pack files exist (more actionable than letting skillsctl fail mid-run).
     for (const p of packList) {
@@ -1725,7 +1728,7 @@ function updateManifest(repoRoot, blueprint, apply) {
   for (const p of packList) {
     const prefix = prefixMap[p];
     if (!prefix) {
-      warnings.push(`Pack "${p}" has no prefix mapping and skillsctl is not installed; skipping (install add-on or add pack mapping).`);
+      warnings.push(`Pack "${p}" has no prefix mapping and skillsctl is not available; skipping.`);
       continue;
     }
     prefixesToAdd.push(prefix);
@@ -1791,60 +1794,6 @@ function cleanupInit(repoRoot, apply) {
   }
 }
 
-function cleanupUnusedAddons(repoRoot, blueprint, addonsRoot, apply) {
-  const enabledAddons = getEnabledAddons(blueprint);
-  const addonsDir = path.join(repoRoot, addonsRoot);
-  
-  const allAddonIds = [
-    'context-awareness',
-    'db-mirror',
-    'packaging',
-    'deployment',
-    'release',
-    'observability'
-  ];
-
-  const removedAddons = [];
-  const skippedAddons = [];
-  
-  if (!fs.existsSync(addonsDir)) {
-    return { removed: removedAddons, skipped: skippedAddons, note: 'addons/ not present' };
-  }
-
-  for (const addonId of allAddonIds) {
-    const addonDir = path.join(addonsDir, addonId);
-    if (!fs.existsSync(addonDir)) continue;
-    
-    if (enabledAddons.includes(addonId)) {
-      skippedAddons.push({ addonId, reason: 'enabled' });
-      continue;
-    }
-    
-    if (!apply) {
-      removedAddons.push({ addonId, mode: 'dry-run' });
-      continue;
-    }
-    
-    try {
-      fs.rmSync(addonDir, { recursive: true, force: true });
-      removedAddons.push({ addonId, mode: 'applied' });
-    } catch (e) {
-      removedAddons.push({ addonId, mode: 'failed', error: e.message });
-    }
-  }
-  
-  // Try to remove the addons/ directory itself if empty
-  if (apply && removedAddons.length > 0) {
-    try {
-      const remaining = fs.readdirSync(addonsDir);
-      if (remaining.length === 0) {
-        fs.rmdirSync(addonsDir);
-      }
-    } catch { /* ignore */ }
-  }
-  
-  return { removed: removedAddons, skipped: skippedAddons };
-}
 
 function main() {
   const { command, opts } = parseArgs(process.argv);
@@ -2047,28 +1996,6 @@ function main() {
 	      addHistoryEvent(state, 'init_completed', note || 'Initialization completed');
 	      saveState(repoRoot, state);
 	      printStatus(state, repoRoot);
-
-        // Optional prompt: remove addons/ payload directory after init completion (interactive only).
-        const addonsRoot = opts['addons-root'] || 'addons';
-        const addonsDecision = maybePromptRemoveAddonsDir(repoRoot, addonsRoot);
-        if (addonsDecision.mode === 'removed') {
-          addHistoryEvent(
-            state,
-            'addons_dir_removed',
-            `Removed add-ons payload directory: ${path.relative(repoRoot, addonsDecision.path)}`
-          );
-          saveState(repoRoot, state);
-          console.log(`[ok] Removed ${path.relative(repoRoot, addonsDecision.path)}`);
-        } else if (addonsDecision.mode === 'failed') {
-          addHistoryEvent(
-            state,
-            'addons_dir_remove_failed',
-            `Failed to remove add-ons payload directory: ${path.relative(repoRoot, addonsDecision.path)} (${addonsDecision.error})`
-          );
-          saveState(repoRoot, state);
-          console.warn(`[warn] Failed to remove ${path.relative(repoRoot, addonsDecision.path)}: ${addonsDecision.error}`);
-        }
-
         process.exit(0);
       }
 
@@ -2218,13 +2145,13 @@ if (command === 'validate') {
     process.exit(v.ok ? 0 : 1);
   }
 
-  if (command === 'suggest-addons') {
-    if (!blueprintPath) die('[error] --blueprint is required for suggest-addons');
+  if (command === 'suggest-features') {
+    if (!blueprintPath) die('[error] --blueprint is required for suggest-features');
     const blueprint = readJson(blueprintPath);
 
     const v = validateBlueprint(blueprint);
-    const rec = recommendedAddonsFromBlueprint(blueprint);
-    const current = getEnabledAddons(blueprint);
+    const rec = recommendedFeaturesFromBlueprint(blueprint);
+    const current = getEnabledFeatures(blueprint);
     const missing = rec.filter((a) => !current.includes(a));
     const extra = current.filter((a) => !rec.includes(a));
 
@@ -2236,20 +2163,18 @@ if (command === 'validate') {
       extra,
       errors: v.errors,
       warnings: v.warnings,
-      summary: `[info] Add-ons: current=${current.join(', ') || '(none)'} | recommended=${rec.join(', ') || '(none)'}`
+      summary: `[info] Features: current=${current.join(', ') || '(none)'} | recommended=${rec.join(', ') || '(none)'}`
     };
 
     if (opts['write']) {
-      if (!v.ok) die('[error] Cannot write add-ons: blueprint validation failed.');
-      blueprint.addons = blueprint.addons || {};
-      for (const addon of missing) {
-        // Convert addon-id to camelCase key
-        const key = addon.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-        blueprint.addons[key] = true;
+      if (!v.ok) die('[error] Cannot write features: blueprint validation failed.');
+      blueprint.features = blueprint.features || {};
+      for (const featureKey of missing) {
+        blueprint.features[featureKey] = true;
       }
       writeJson(blueprintPath, blueprint);
-      result.wrote = { path: path.relative(repoRoot, blueprintPath), addons: [...current, ...missing] };
-      result.summary += `\n[write] Added missing recommended add-ons into blueprint.addons`;
+      result.wrote = { path: path.relative(repoRoot, blueprintPath), features: [...current, ...missing] };
+      result.summary += `\n[write] Added missing recommended features into blueprint.features`;
     }
 
     printResult(result, format);
@@ -2288,17 +2213,12 @@ if (command === 'validate') {
     const requireStageA = !!opts['require-stage-a'];
     const skipConfigs = !!opts['skip-configs'];
     const cleanup = !!opts['cleanup-init'];
-    const cleanupAddons = !!opts['cleanup-addons'];
-    const forceAddons = !!opts['force-addons'];
-    const verifyAddons = !!opts['verify-addons'];
-    const nonBlockingAddons = !!opts['non-blocking-addons'];
-    const addonsRoot = opts['addons-root'] || 'addons';
+    const forceFeatures = !!opts['force-features'];
+    const verifyFeatures = !!opts['verify-features'];
+    const nonBlockingFeatures = !!opts['non-blocking-features'];
 
     if (cleanup && !opts['i-understand']) {
       die('[error] --cleanup-init requires --i-understand');
-    }
-    if (cleanupAddons && !cleanup) {
-      die('[error] --cleanup-addons requires --cleanup-init');
     }
 
     const blueprint = readJson(blueprintPath);
@@ -2346,47 +2266,56 @@ if (command === 'validate') {
       console.log(`[info] README.md: ${readmeResult.reason}`);
     }
 
-    const addonOptions = { force: forceAddons, verify: verifyAddons };
+    const featureOptions = { force: forceFeatures, verify: verifyFeatures };
     const verifyFailures = [];
-    
-    // Optional: context awareness add-on (on-demand; minimal intrusion)
-    const contextAddon = ensureContextAwarenessAddon(repoRoot, blueprint, addonsRoot, true, addonOptions);
-    if (contextAddon.errors && contextAddon.errors.length > 0) {
-      for (const e of contextAddon.errors) console.error(`[error] ${e}`);
-      if (!nonBlockingAddons) {
-        die('[error] Context awareness add-on setup failed. Use --non-blocking-addons to continue despite errors.');
+
+    // Ensure project state exists (records enabled features for LLMs and tooling)
+    const projectctlPath = path.join(repoRoot, '.ai', 'scripts', 'projectctl.js');
+    if (fs.existsSync(projectctlPath)) {
+      const initRes = runNodeScriptWithRepoRootFallback(repoRoot, projectctlPath, ['init', '--repo-root', repoRoot], true);
+      if (initRes.mode === 'failed') {
+        console.warn('[warn] projectctl init failed; feature flags may not be recorded.');
       }
     }
-    if (contextAddon.verifyFailed) {
-      const msg = contextAddon.verifyError || 'Context awareness verify failed';
+
+    // Optional: Context Awareness feature (recommended when you want LLM-stable contracts)
+    const contextFeature = ensureContextAwarenessFeature(repoRoot, blueprint, true, featureOptions);
+    if (contextFeature.errors && contextFeature.errors.length > 0) {
+      for (const e of contextFeature.errors) console.error(`[error] ${e}`);
+      if (!nonBlockingFeatures) {
+        die('[error] Context awareness feature setup failed. Use --non-blocking-features to continue despite errors.');
+      }
+    }
+    if (contextFeature.verifyFailed) {
+      const msg = contextFeature.verifyError || 'Context awareness verify failed';
       console.error(`[error] ${msg}`);
       verifyFailures.push('context-awareness');
-      if (!nonBlockingAddons) {
-        die('[error] Context awareness verify failed. Use --non-blocking-addons to continue despite errors.');
+      if (!nonBlockingFeatures) {
+        die('[error] Context awareness verify failed. Use --non-blocking-features to continue despite errors.');
       }
     }
-    if (contextAddon.warnings && contextAddon.warnings.length > 0) {
-      for (const w of contextAddon.warnings) console.warn(`[warn] ${w}`);
+    if (contextFeature.warnings && contextFeature.warnings.length > 0) {
+      for (const w of contextFeature.warnings) console.warn(`[warn] ${w}`);
     }
 
-    // Optional add-ons installation
-    const addonResults = [];
+    // Optional feature materialization
+    const featureResults = [];
 
-    // Helper function to handle addon installation with fail-fast support
-    function handleAddonResult(res, addonName) {
-      addonResults.push(res);
+    // Helper function to handle feature installation with fail-fast support
+    function handleFeatureResult(res, featureId) {
+      featureResults.push(res);
       if (res.errors.length > 0) {
         for (const e of res.errors) console.error(`[error] ${e}`);
-        if (!nonBlockingAddons) {
-          die(`[error] Add-on "${addonName}" installation failed. Use --non-blocking-addons to continue despite errors.`);
+        if (!nonBlockingFeatures) {
+          die(`[error] Feature "${featureId}" installation failed. Use --non-blocking-features to continue despite errors.`);
         }
       }
       if (res.verifyFailed) {
-        const msg = res.verifyError || `Add-on "${addonName}" verify failed`;
+        const msg = res.verifyError || `Feature "${featureId}" verify failed`;
         console.error(`[error] ${msg}`);
-        verifyFailures.push(addonName);
-        if (!nonBlockingAddons) {
-          die(`[error] Add-on "${addonName}" verify failed. Use --non-blocking-addons to continue despite errors.`);
+        verifyFailures.push(featureId);
+        if (!nonBlockingFeatures) {
+          die(`[error] Feature "${featureId}" verify failed. Use --non-blocking-features to continue despite errors.`);
         }
       }
       if (res.warnings.length > 0) {
@@ -2394,39 +2323,39 @@ if (command === 'validate') {
       }
     }
 
-    // db-mirror add-on
+    // DB Mirror feature
     if (isDbMirrorEnabled(blueprint)) {
-      console.log('[info] Installing db-mirror add-on...');
-      const res = ensureAddon(repoRoot, 'db-mirror', addonsRoot, true, 'dbctl.js', addonOptions);
-      handleAddonResult(res, 'db-mirror');
+      console.log('[info] Enabling DB Mirror feature...');
+      const res = ensureFeature(repoRoot, 'db-mirror', true, 'dbctl.js', { ...featureOptions, stateKey: 'dbMirror' });
+      handleFeatureResult(res, 'db-mirror');
     }
 
-    // packaging add-on
+    // Packaging feature
     if (isPackagingEnabled(blueprint)) {
-      console.log('[info] Installing packaging add-on...');
-      const res = ensureAddon(repoRoot, 'packaging', addonsRoot, true, 'packctl.js', addonOptions);
-      handleAddonResult(res, 'packaging');
+      console.log('[info] Enabling Packaging feature...');
+      const res = ensureFeature(repoRoot, 'packaging', true, 'packctl.js', featureOptions);
+      handleFeatureResult(res, 'packaging');
     }
 
-    // deployment add-on
+    // Deployment feature
     if (isDeploymentEnabled(blueprint)) {
-      console.log('[info] Installing deployment add-on...');
-      const res = ensureAddon(repoRoot, 'deployment', addonsRoot, true, 'deployctl.js', addonOptions);
-      handleAddonResult(res, 'deployment');
+      console.log('[info] Enabling Deployment feature...');
+      const res = ensureFeature(repoRoot, 'deployment', true, 'deployctl.js', featureOptions);
+      handleFeatureResult(res, 'deployment');
     }
 
-    // release add-on
+    // Release feature
     if (isReleaseEnabled(blueprint)) {
-      console.log('[info] Installing release add-on...');
-      const res = ensureAddon(repoRoot, 'release', addonsRoot, true, 'releasectl.js', addonOptions);
-      handleAddonResult(res, 'release');
+      console.log('[info] Enabling Release feature...');
+      const res = ensureFeature(repoRoot, 'release', true, 'releasectl.js', featureOptions);
+      handleFeatureResult(res, 'release');
     }
 
-    // observability add-on
+    // Observability feature
     if (isObservabilityEnabled(blueprint)) {
-      console.log('[info] Installing observability add-on...');
-      const res = ensureAddon(repoRoot, 'observability', addonsRoot, true, 'obsctl.js', addonOptions);
-      handleAddonResult(res, 'observability');
+      console.log('[info] Enabling Observability feature...');
+      const res = ensureFeature(repoRoot, 'observability', true, 'obsctl.js', featureOptions);
+      handleFeatureResult(res, 'observability');
     }
 
     // DB SSOT bootstrap (docs/project + AGENTS + LLM db context)
@@ -2438,7 +2367,7 @@ if (command === 'validate') {
     if (agentsDbSsotResult.mode === 'applied') {
       console.log(`[ok] AGENTS.md updated (DB SSOT section)`);
     }
-    const dbContextRefreshResult = refreshDbContextContract(repoRoot, blueprint, true);
+    const dbContextRefreshResult = refreshDbContextContract(repoRoot, blueprint, true, verifyFeatures);
     if (dbContextRefreshResult.mode === 'applied') {
       console.log(`[ok] DB context refreshed: ${path.relative(repoRoot, dbContextRefreshResult.path)}`);
     } else if (dbContextRefreshResult.reason) {
@@ -2485,33 +2414,23 @@ if (command === 'validate') {
 	      saveState(repoRoot, state);
 	      console.log('[auto] State updated: stage-c.* = true');
 	    }
-
     // Optional cleanup
-    let cleanupResult = null;
-    let addonsCleanupResult = null;
+    let cleanupResult = null
     if (cleanup) {
-      cleanupResult = cleanupInit(repoRoot, true);
+      cleanupResult = cleanupInit(repoRoot, true)
       if (cleanupResult.mode === 'partial') {
-        console.warn(`[warn] cleanup-init partially completed: ${cleanupResult.note}`);
-      }
-      
-      // Also cleanup unused addons if requested
-      if (cleanupAddons) {
-        addonsCleanupResult = cleanupUnusedAddons(repoRoot, blueprint, addonsRoot, true);
-        if (addonsCleanupResult.removed.length > 0) {
-          console.log(`[ok] Unused add-ons pruned: ${addonsCleanupResult.removed.map(r => r.addonId).join(', ')}`);
-        }
+        console.warn(`[warn] cleanup-init partially completed: ${cleanupResult.note}`)
       }
     }
 
     if (format === 'json') {
       console.log(JSON.stringify({
-	        ok: true,
-	        blueprint: path.relative(repoRoot, blueprintPath),
-	        docsRoot: path.relative(repoRoot, docsRoot),
-	        'stage-a': stage_a_res,
-        contextAddon: contextAddon,
-        addons: addonResults,
+        ok: true,
+        blueprint: path.relative(repoRoot, blueprintPath),
+        docsRoot: path.relative(repoRoot, docsRoot),
+        'stage-a': stage_a_res,
+        contextFeature,
+        features: featureResults,
         scaffold: scaffoldPlan,
         configs: configResults,
         dbSsotConfig: dbSsotConfigResult,
@@ -2522,40 +2441,43 @@ if (command === 'validate') {
         skillRetentionTemplate: retentionTemplateResult,
         manifest: manifestResult,
         sync: syncResult,
-        cleanup: cleanupResult,
-        addonsCleanup: addonsCleanupResult
-      }, null, 2));
+        cleanup: cleanupResult
+      }, null, 2))
     } else {
-      console.log('[ok] Apply completed.');
-      console.log(`- Blueprint: ${path.relative(repoRoot, blueprintPath)}`);
-      console.log(`- Docs root: ${path.relative(repoRoot, docsRoot)}`);
-      console.log(`- DB SSOT: ${blueprint.db && blueprint.db.ssot ? blueprint.db.ssot : 'unknown'}`);
-      if (contextAddon && contextAddon.enabled) {
-        console.log(`- Context awareness: enabled (addonsRoot=${addonsRoot})`);
+      console.log('[ok] Apply completed.')
+      console.log(`- Blueprint: ${path.relative(repoRoot, blueprintPath)}`)
+      console.log(`- Docs root: ${path.relative(repoRoot, docsRoot)}`)
+      console.log(`- DB SSOT: ${blueprint.db && blueprint.db.ssot ? blueprint.db.ssot : 'unknown'}`)
+
+      const installed = []
+      if (contextFeature && contextFeature.enabled) installed.push('context-awareness')
+      for (const r of featureResults) {
+        if (r && r.featureId && r.op === 'ensure') installed.push(r.featureId)
       }
-      if (addonResults.length > 0) {
-        console.log(`- Add-ons installed: ${addonResults.map(r => r.addonId).join(', ')}`);
+      if (installed.length > 0) {
+        console.log(`- Features installed: ${installed.join(', ')}`)
       }
-      if (verifyAddons) {
+
+      if (verifyFeatures) {
         if (verifyFailures.length > 0) {
-          console.log(`- Add-ons verified: failed (${verifyFailures.join(', ')})`);
+          console.log(`- Features verified: failed (${verifyFailures.join(', ')})`)
         } else {
-          console.log(`- Add-ons verified: yes`);
+          console.log(`- Features verified: yes`)
         }
       }
-      if (!stage_a_res.ok) console.log('[warn] Stage A docs check had errors; consider re-running with --require-stage-a.');
-      if (stage_a_res.warnings.length > 0) console.log('[warn] Stage A docs check has warnings; ensure TBD/TODO items are tracked.');
+
+      if (!stage_a_res.ok) console.log('[warn] Stage A docs check had errors; consider re-running with --require-stage-a.')
+      if (stage_a_res.warnings.length > 0) console.log('[warn] Stage A docs check has warnings; ensure TBD/TODO items are tracked.')
       if (retentionTemplateResult.path) {
-        const status = retentionTemplateResult.mode || retentionTemplateResult.reason || 'unknown';
-        console.log(`- Skill retention template: ${path.relative(repoRoot, retentionTemplateResult.path)} (${status})`);
+        const status = retentionTemplateResult.mode || retentionTemplateResult.reason || 'unknown'
+        console.log(`- Skill retention template: ${path.relative(repoRoot, retentionTemplateResult.path)} (${status})`)
       }
-      console.log(`- Manifest updated: ${path.relative(repoRoot, manifestResult.path)}`);
-      console.log(`- Wrappers synced via: ${syncResult.cmd || '(skipped)'}`);
-      if (cleanupResult) console.log(`- init/ cleanup: ${cleanupResult.mode}`);
-      if (addonsCleanupResult) console.log(`- Unused add-ons pruned: ${addonsCleanupResult.removed.length > 0 ? addonsCleanupResult.removed.map(r => r.addonId).join(', ') : 'none'}`);
+      console.log(`- Manifest updated: ${path.relative(repoRoot, manifestResult.path)}`)
+      console.log(`- Wrappers synced via: ${syncResult.cmd || '(skipped)'}`)
+      if (cleanupResult) console.log(`- init/ cleanup: ${cleanupResult.mode}`)
     }
 
-    process.exit(0);
+    process.exit(0)
   }
 
   if (command === 'cleanup-init') {
@@ -2564,10 +2486,8 @@ if (command === 'validate') {
     const archiveAll = !!opts['archive'];
     const archiveDocs = archiveAll || !!opts['archive-docs'];
     const archiveBlueprint = archiveAll || !!opts['archive-blueprint'];
-    const cleanupAddonsFlag = !!opts['cleanup-addons'];
-    const addonsRoot = opts['addons-root'] || 'addons';
 
-    const results = { init: null, addons: null, archivedDocs: null, archivedBlueprint: null };
+    const results = { init: null, archivedDocs: null, archivedBlueprint: null };
     const destDir = path.join(repoRoot, 'docs', 'project');
 
     // Archive Stage A docs if requested
@@ -2615,15 +2535,6 @@ if (command === 'validate') {
     // Cleanup init/ directory
     results.init = cleanupInit(repoRoot, apply);
 
-    // Optionally cleanup unused add-on directories
-    if (cleanupAddonsFlag) {
-      if (!blueprintPath) {
-        die('[error] --cleanup-addons requires --blueprint to determine enabled add-ons');
-      }
-      const blueprint = readJson(blueprintPath);
-      results.addons = cleanupUnusedAddons(repoRoot, blueprint, addonsRoot, apply);
-    }
-
     if (format === 'json') {
       console.log(JSON.stringify({ ok: true, results }, null, 2));
     } else {
@@ -2655,18 +2566,6 @@ if (command === 'validate') {
         } else {
           console.log(`[ok] ${res.op}: ${path.relative(repoRoot, res.path || '')} (${res.mode})`);
           if (res.note) console.log(`Note: ${res.note}`);
-        }
-      }
-      
-      // Print addons cleanup result
-      if (results.addons) {
-        console.log('');
-        console.log('[addons cleanup]');
-        for (const r of results.addons.removed) {
-          console.log(`  - ${r.mode === 'dry-run' ? '[plan] ' : '[ok] '}remove: ${r.addonId} (${r.mode})${r.error ? ' - ' + r.error : ''}`);
-        }
-        for (const s of results.addons.skipped) {
-          console.log(`  - [skip] ${s.addonId}: ${s.reason}`);
         }
       }
     }

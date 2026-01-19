@@ -2,7 +2,7 @@
   "version": 1,
   "project": {
     "name": "example-project",
-    "description": "Example project demonstrating all blueprint and add-on options",
+    "description": "Example project demonstrating all blueprint and feature options",
     "domain": "E-commerce",
     "primaryUsers": [
       "customers",
@@ -56,14 +56,6 @@
       "standards",
       "context-core"
     ]
-  },
-  "addons": {
-    "contextAwareness": true,
-    "dbMirror": true,
-    "packaging": true,
-    "deployment": true,
-    "release": true,
-    "observability": true
   },
   "context": {
     "enabled": true,
@@ -136,5 +128,13 @@
     "logs": true,
     "traces": true,
     "platform": "prometheus"
+  },
+  "features": {
+    "contextAwareness": true,
+    "dbMirror": true,
+    "packaging": true,
+    "deployment": true,
+    "release": true,
+    "observability": true
   }
 }

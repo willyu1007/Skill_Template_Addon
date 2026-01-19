@@ -6,12 +6,12 @@ The `init/` package provides a 3-stage, checkpointed workflow to bootstrap a rep
 
 - **Stage A**: Requirements docs (working location: `init/stage-a-docs/`)
 - **Stage B**: Blueprint (working location: `init/project-blueprint.json`)
-- **Stage C**: Scaffold + configs + skill packs + add-ons + wrapper sync
+- **Stage C**: Scaffold + configs + skill packs + features + wrapper sync
 
 It is designed for **robustness and auditability**:
 - Each stage has a **validation step** (written into `init/.init-state.json`)
 - Stage transitions require **explicit user approval** (`approve` command)
-- Optional add-ons are installed **only when enabled in the blueprint**
+- Optional features are materialized **only when enabled in the blueprint** (`features.*`)
 
 > **Working directory vs. final location**: During initialization, all working files are stored in `init/`. After completion, use `cleanup-init --archive` to move Stage A docs and blueprint to `docs/project/` for long-term retention.
 
@@ -55,22 +55,21 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs validate \
   --repo-root .
 
+# Optional: report recommended packs/features
+node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs suggest-packs \
+  --repo-root .
+node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs suggest-features \
+  --repo-root .
+
 # After the user explicitly approves Stage B:
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs approve --stage B --repo-root .
 ```
 
-### 3) Stage C: apply scaffold/configs/packs/addons/wrappers → approve
+### 3) Stage C: apply scaffold/configs/packs/features/wrappers → approve
 ```bash
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs apply \
   --repo-root . \
   --providers both
-
-# Optional: verify add-ons after installation (fail-fast by default).
-# Use --non-blocking-addons to continue despite verify failures.
-# node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs apply \
-#   --repo-root . \
-#   --providers both \
-#   --verify-addons
 
 # After the user explicitly approves Stage C:
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs approve --stage C --repo-root .
@@ -99,165 +98,49 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs 
 
 The command archives Stage A docs and blueprint to `docs/project/`, then removes `init/`.
 
-**Option C: Archive + prune unused add-ons** (recommended for minimal final repo)
-
-```bash
-node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs cleanup-init \
-  --repo-root . \
-  --apply \
-  --i-understand \
-  --archive \
-  --cleanup-addons
-```
-
-The command archives files, removes `init/`, and deletes add-on source directories under `addons/` that were not enabled in the blueprint.
-
 ---
 
-## Documentation Structure
+## Blueprint anatomy
 
-### Single Sources of Truth (SSOT)
+The blueprint schema is:
 
-| Topic | Location |
-|-------|----------|
-| Init behavior & commands | `skills/initialize-project-from-requirements/SKILL.md` |
-| Technical reference | `skills/initialize-project-from-requirements/reference.md` |
-| LLM guidance | `skills/initialize-project-from-requirements/templates/llm-init-guide.md` |
-| Question bank | `skills/initialize-project-from-requirements/templates/conversation-prompts.md` |
-| Add-on conventions | `addon-docs/README.md` |
+- `init/skills/initialize-project-from-requirements/templates/project-blueprint.schema.json`
 
-### Supporting docs
+Key sections:
 
-| Document | Purpose |
-|----------|---------|
-| `README.md` (this file) | Quick start overview |
-| `AGENTS.md` | AI agent guidance |
-| `stages/*.md` | Stage-specific details |
-| `addon-docs/*.md` | Individual add-on documentation |
+- `project.*`: name, description, and domain basics
+- `db.ssot`: database schema single-source-of-truth
+  - `none` | `repo-prisma` | `database`
+- `context.*`: context configuration (does not enable the feature by itself)
+- `capabilities.*`: informs scaffold and pack selection
+- `features.*`: optional features to materialize during Stage C
 
----
+## Optional features
 
-## Available Add-ons
+This template does **not** ship an `addons/` directory. Feature assets are integrated under `.ai/`:
 
-This init kit supports multiple optional add-ons:
+- Feature skills + templates: `.ai/skills/features/...`
+- Control scripts: `.ai/scripts/...`
+- Project state (feature flags): `.ai/project/state.json`
 
-| Add-on | Blueprint Toggle | Purpose |
-|--------|-----------------|---------|
-| Context Awareness | `addons.contextAwareness` | API/DB/BPMN contracts for LLM |
-| DB Mirror | `addons.dbMirror` | Database schema mirroring |
-| Packaging | `addons.packaging` | Container/artifact packaging |
-| Deployment | `addons.deployment` | Multi-environment deployment |
-| Release | `addons.release` | Version/changelog management |
-| Observability | `addons.observability` | Metrics/logs/traces contracts |
+Stage C `apply` materializes a feature by copying templates into the repo and running the corresponding `*ctl.js init`.
 
-### Enabling Add-ons
+| Feature | Blueprint toggle | Materializes | Control script |
+|---------|------------------|--------------|----------------|
+| Context awareness | `features.contextAwareness` | `docs/context/**`, `config/environments/**` | `.ai/scripts/contextctl.js` |
+| DB mirror | `features.dbMirror` (requires `db.ssot=database`) | `db/**` | `.ai/scripts/dbctl.js` |
+| Packaging | `features.packaging` | `ops/packaging/**`, `docs/packaging/**` | `.ai/scripts/packctl.js` |
+| Deployment | `features.deployment` | `ops/deploy/**` | `.ai/scripts/deployctl.js` |
+| Observability | `features.observability` (requires context awareness) | `docs/context/observability/**`, `observability/**` | `.ai/scripts/obsctl.js` |
+| Release | `features.release` | `release/**`, `.releaserc.json.template` | `.ai/scripts/releasectl.js` |
 
-In `project-blueprint.json`:
+For feature-specific details, see:
 
-```json
-{
-  "addons": {
-    "contextAwareness": true,
-    "dbMirror": true,
-    "packaging": true,
-    "deployment": true,
-    "release": true,
-    "observability": true
-  }
-}
-```
+- `init/feature-docs/README.md`
+- `.ai/skills/features/<feature-id>/feature-<feature-id>/SKILL.md`
 
-**Important:** Only `addons.*` toggles trigger add-on installation. The top-level configuration blocks (`db`, `ci`, `packaging`, `deploy`, `release`, `observability`) are for **configuration parameters only** and do not trigger installation:
+## Apply flags (Stage C)
 
-```json
-{
-  "addons": {
-    "dbMirror": true,          // ← triggers db-mirror add-on installation
-    "packaging": true          // ← triggers packaging add-on installation
-  },
-  "db": {
-    "kind": "postgres",        // ← configuration only, does NOT trigger installation
-    "migrationTool": "prisma"
-  },
-  "ci": {
-    "platform": "github-actions",  // ← configuration only, does NOT trigger installation
-    "features": ["lint", "test"]
-  }
-}
-```
-
-Use `suggest-addons` to get recommendations based on your blueprint capabilities:
-
-```bash
-node init/skills/initialize-project-from-requirements/scripts/init-pipeline.cjs suggest-addons \
-  --blueprint init/project-blueprint.json --write
-```
-
-See:
-- `addon-docs/README.md` - Add-on conventions
-- `addon-docs/*.md` - Individual add-on documentation
-- `addons/CONVENTION.md` - Full convention specification
-
----
-
-## LLM-Guided Initialization
-
-The init kit supports an AI assistant guiding users through the full initialization workflow.
-
-### Flow
-
-```
-requirements interview → tech stack selection → blueprint generation → add-on recommendations → config generation → apply
-```
-
-### Supported languages
-
-| Language | Template support | Config generation |
-|----------|------------------|------------------|
-| TypeScript/JavaScript | ✅ | built-in templates |
-| Go | ✅ | built-in templates |
-| C/C++ (xmake) | ✅ | built-in templates |
-| React Native | ✅ | built-in templates |
-| Python | ❌ | LLM-generated |
-| Java/Kotlin | ❌ | LLM-generated |
-| .NET (C#) | ❌ | LLM-generated |
-| Rust | ❌ | LLM-generated |
-| Other | ❌ | LLM-generated |
-
-### Guidance docs
-
-- `skills/initialize-project-from-requirements/templates/llm-init-guide.md` - full guide for LLM-driven initialization
-- `skills/initialize-project-from-requirements/templates/conversation-prompts.md` - question bank / conversation modules
-
-### Handling languages without templates
-
-When the user selects a language without a built-in template:
-1. `scaffold-configs.cjs` prints guidance and config recommendations
-2. The LLM generates config files based on `llm-init-guide.md`
-3. After user confirmation, continue with `apply`
-
----
-
-## DevOps scaffold (optional)
-
-If the blueprint indicates CI/DevOps needs, Stage C scaffolding can create an `ops/` convention folder:
-
-- `ops/packaging/{services,jobs,apps,scripts,workdocs}/`
-- `ops/deploy/{http_services,workloads,clients,scripts,workdocs}/`
-
-When add-ons are enabled, they provide more complete implementations with management scripts.
-
----
-
-## Files in the init kit
-
-- `stages/` - stage guidance docs
-- `skills/initialize-project-from-requirements/` - the skill definition and scripts
-  - `templates/project-blueprint.example.json` - full example (all add-ons enabled)
-  - `templates/project-blueprint.min.example.json` - minimal example (backend only)
-  - `templates/llm-init-guide.md` - LLM initialization guide
-  - `templates/conversation-prompts.md` - question bank and conversation modules
-- `addon-docs/` - add-on documentation
-  - `README.md` - add-on conventions and index
-  - `*.md` - individual add-on documentation
-- `.init-kit` - marker file
+- `--force-features`: overwrite existing feature files when materializing templates
+- `--verify-features`: run `*ctl.js verify` after `init` (fail-fast by default)
+- `--non-blocking-features`: continue despite feature init/verify errors (not recommended)
