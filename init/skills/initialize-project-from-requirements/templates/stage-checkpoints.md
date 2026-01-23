@@ -13,7 +13,7 @@ This init kit enforces a strict checkpoint policy:
 > - Stage A docs: `init/stage-a-docs/`
 > - Blueprint: `init/project-blueprint.json`
 > 
-> After completion, use `cleanup-init --archive` to move them to `docs/project/`.
+> After completion, use `cleanup-init --archive` to move them to `docs/project/overview/`.
 
 The **technical mechanism** to advance stages is:
 
@@ -98,7 +98,19 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs 
    ```bash
    node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs apply --repo-root . --providers both
    ```
-2. The user reviews the resulting changes (scaffold/configs/packs/wrappers/`README.md`) and explicitly approves.
+2. Skill retention is confirmed (required before Stage C approval):
+   ```bash
+   node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs skill-retention --repo-root .
+   # After confirmation (if deleting skills)
+   node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs skill-retention --repo-root . --apply
+   ```
+3. The user reviews the resulting changes (scaffold/configs/packs/wrappers) and explicitly approves.
+4. Optional: preview/apply root docs update from blueprint:
+   ```bash
+   node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs update-root-docs --repo-root .
+   # After explicit approval
+   node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs update-root-docs --repo-root . --apply
+   ```
 
 ### Action
 
@@ -109,28 +121,6 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs 
 ```
 
 ### Post-init options
-
-After Stage C approval, explicitly ask whether to record key project facts in `AGENTS.md`, then present options:
-
-> Do you want to record the project type, tech stack, and key directories in the root `AGENTS.md`? Reply `"update agents"` to proceed, or reply `"done"` to skip.
-
-| User reply | Action |
-|------------|--------|
-| `"update agents"` | Update root `AGENTS.md` with project info (recommended) |
-| `"cleanup init"` | Archive docs and remove the init kit |
-| `"done"` | Complete initialization without further changes |
-
-**If user says "update agents"**:
-
-1. Read current root `AGENTS.md`
-2. Preserve template repo structure (Key Directories, Routing, Global Rules, `.ai/` reference, `dev-docs/` reference)
-3. Add project-specific info from blueprint:
-   - Replace template intro paragraph + update Project Type section body (`project.name` + `project.description`)
-   - Tech Stack table (`repo.language`, `repo.packageManager`, `repo.layout`, frameworks)
-   - Update Key Directories with project-specific paths
-4. Ensure idempotency: do NOT create duplicate sections/tables on re-run
-5. Follow LLM-friendly doc rules: moderate semantic density, structured tables, token-efficient
-6. Show diff to user before applying
 
 Optional: remove the bootstrap kit (only after completion and user confirmation):
 
@@ -157,4 +147,4 @@ If a session is interrupted:
 
 Note:
 - The state file is stored under `init/` and is intended as working data for initialization.
-- Once the init kit is removed via `cleanup-init`, the state will be deleted as well.
+- Once the init kit is removed via `cleanup-init`, the state will be deleted unless archived (default: `docs/project/overview/init-state.json`).

@@ -5,7 +5,7 @@
 
 Run these commands from repo root.
 
-> **Note**: During initialization, working files are stored in `init/` (Stage A docs in `init/stage-a-docs/`, blueprint in `init/project-blueprint.json`). After completion, use `cleanup-init --archive` to move them to `docs/project/`.
+> **Note**: During initialization, working files are stored in `init/` (Stage A docs in `init/stage-a-docs/`, blueprint in `init/project-blueprint.json`). After completion, use `cleanup-init --archive` to move them to `docs/project/overview/`.
 
 ---
 
@@ -108,7 +108,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs 
   --i-understand
 ```
 
-**Option B: Archive to docs/project/ + remove init/** (recommended)
+**Option B: Archive to docs/project/overview/ + remove init/** (recommended)
 
 ```bash
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs cleanup-init \

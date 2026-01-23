@@ -13,7 +13,7 @@ It is designed for **robustness and auditability**:
 - Stage transitions require **explicit user approval** (`approve` command)
 - Optional features are materialized **only when enabled in the blueprint** (`features.*`)
 
-> **Working directory vs. final location**: During initialization, all working files are stored in `init/`. After completion, use `cleanup-init --archive` to move Stage A docs and blueprint to `docs/project/` for long-term retention.
+> **Working directory vs. final location**: During initialization, all working files are stored in `init/`. After completion, use `cleanup-init --archive` to move Stage A docs + blueprint + init state to `docs/project/overview/` for long-term retention (keep SSOT files in `docs/project/` clean).
 
 ---
 
@@ -96,7 +96,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs 
   --i-understand
 ```
 
-**Option B: Archive to `docs/project/` + remove `init/`** (recommended for retaining docs)
+**Option B: Archive to `docs/project/overview/` + remove `init/`** (recommended for retaining docs)
 
 ```bash
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs cleanup-init \
@@ -106,7 +106,7 @@ node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs 
   --archive
 ```
 
-The command archives Stage A docs and blueprint to `docs/project/`, then removes `init/`.
+The command archives Stage A docs + blueprint + init state to `docs/project/overview/`, then removes `init/`.
 
 ---
 

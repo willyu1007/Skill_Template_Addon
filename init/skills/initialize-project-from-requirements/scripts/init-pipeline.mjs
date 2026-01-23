@@ -17,9 +17,11 @@
  *   - check-docs     Validate Stage A docs (structure + template placeholders)
  *   - mark-must-ask  Update Stage A must-ask checklist state
  *   - review-packs   Mark Stage B packs review as completed
+ *   - skill-retention Confirm skill retention and (optional) delete skills
  *   - suggest-packs  Recommend skill packs from blueprint capabilities (warn-only by default)
  *   - suggest-features Recommend features from blueprint capabilities
  *   - scaffold       Plan or apply a minimal directory scaffold from the blueprint
+ *   - update-root-docs Preview/apply README.md + AGENTS.md updates from blueprint
  *   - apply          validate + (optional) check-docs + scaffold + configs + pack enable + wrapper sync
  *   - cleanup-init   Remove the `init/` bootstrap kit (opt-in, guarded)
  *
@@ -81,6 +83,11 @@ Commands:
     --repo-root <path>          Repo root (default: cwd)
     --note <text>               Optional audit note
 
+  skill-retention
+    --repo-root <path>          Repo root (default: cwd)
+    --file <path>               Skill retention table (default: init/skill-retention-table.template.md)
+    --apply                     Apply deletions via sync-skills.mjs (default: dry-run)
+
   suggest-packs
     --blueprint <path>          Blueprint JSON path (default: init/project-blueprint.json)
     --repo-root <path>          Repo root (default: cwd)
@@ -97,6 +104,12 @@ Commands:
     --blueprint <path>          Blueprint JSON path (default: init/project-blueprint.json)
     --repo-root <path>          Repo root (default: cwd)
     --apply                     Actually create directories/files (default: dry-run)
+
+  update-root-docs
+    --blueprint <path>          Blueprint JSON path (default: init/project-blueprint.json)
+    --repo-root <path>          Repo root (default: cwd)
+    --apply                     Write README.md + AGENTS.md (default: show diff only)
+    --format <text|json>        Output format (default: text)
 
   apply
     --blueprint <path>          Blueprint JSON path (default: init/project-blueprint.json)
@@ -290,6 +303,7 @@ function createInitialState() {
       configsGenerated: false,
       manifestUpdated: false,
       wrappersSynced: false,
+      skillRetentionReviewed: false,
       userApproved: false
     },
     history: []
@@ -356,6 +370,7 @@ function getStageProgress(state) {
       configsGenerated: !!stage_c.configsGenerated,
       manifestUpdated: !!stage_c.manifestUpdated,
       wrappersSynced: !!stage_c.wrappersSynced,
+      skillRetentionReviewed: !!stage_c.skillRetentionReviewed,
       userApproved: !!stage_c.userApproved
     }
   };
@@ -832,13 +847,51 @@ function ensureSkillRetentionTemplate(repoRoot, apply) {
   return { op: 'copy', path: destPath, mode: 'applied' };
 }
 
+function parseSkillRetentionDeletionList(markdown) {
+  const warnings = [];
+  const normalized = String(markdown || '').replace(/\r\n/g, '\n');
+  const lines = normalized.split('\n');
+
+  let startIdx = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/^##\s+Deletion List\b/i.test(lines[i].trim())) {
+      startIdx = i + 1;
+      break;
+    }
+  }
+
+  if (startIdx < 0) {
+    warnings.push('Missing section: "## Deletion List" (no deletions will be applied).');
+    return { deletions: [], warnings };
+  }
+
+  let endIdx = lines.length;
+  for (let i = startIdx; i < lines.length; i += 1) {
+    if (/^##\s+/.test(lines[i].trim())) {
+      endIdx = i;
+      break;
+    }
+  }
+
+  const deletions = [];
+  for (const line of lines.slice(startIdx, endIdx)) {
+    const m = line.match(/^\s*[-*]\s+(.+?)\s*$/);
+    if (!m) continue;
+    const v = m[1].trim();
+    if (!v || v === '<skill-name>' || v === '...') continue;
+    deletions.push(v);
+  }
+
+  return { deletions: uniq(deletions), warnings };
+}
+
 /**
  * Generates a project-specific README.md from the blueprint.
  * Replaces the template README with project information.
  */
 function generateProjectReadme(repoRoot, blueprint, apply) {
   const readmePath = path.join(repoRoot, 'README.md');
-  const templatePath = path.join(__dirname, 'templates', 'README.template.md');
+  const templatePath = path.join(TEMPLATES_DIR, 'README.template.md');
   
   if (!fs.existsSync(templatePath)) {
     return { op: 'skip', path: readmePath, reason: 'template not found' };
@@ -953,13 +1006,287 @@ function generateProjectReadme(repoRoot, blueprint, apply) {
   
   // Clean up multiple empty lines
   template = template.replace(/\n{3,}/g, '\n\n');
+
+  const rendered = template.trimEnd() + '\n';
   
   if (!apply) {
-    return { op: 'write', path: readmePath, mode: 'dry-run' };
+    return { op: 'render', path: readmePath, mode: 'dry-run', content: rendered };
   }
   
-  fs.writeFileSync(readmePath, template, 'utf8');
-  return { op: 'write', path: readmePath, mode: 'applied' };
+  fs.writeFileSync(readmePath, rendered, 'utf8');
+  return { op: 'write', path: readmePath, mode: 'applied', content: rendered };
+}
+
+function splitLinesForDiff(text) {
+  const normalized = String(text || '').replace(/\r\n/g, '\n');
+  const withoutTrailingNewline = normalized.endsWith('\n') ? normalized.slice(0, -1) : normalized;
+  if (withoutTrailingNewline === '') return [];
+  return withoutTrailingNewline.split('\n');
+}
+
+function lcsLineOps(oldLines, newLines) {
+  const n = oldLines.length;
+  const m = newLines.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+
+  for (let i = n - 1; i >= 0; i -= 1) {
+    for (let j = m - 1; j >= 0; j -= 1) {
+      dp[i][j] = oldLines[i] === newLines[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+
+  const ops = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (oldLines[i] === newLines[j]) {
+      ops.push({ op: 'equal', line: oldLines[i] });
+      i += 1;
+      j += 1;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      ops.push({ op: 'delete', line: oldLines[i] });
+      i += 1;
+    } else {
+      ops.push({ op: 'insert', line: newLines[j] });
+      j += 1;
+    }
+  }
+  while (i < n) {
+    ops.push({ op: 'delete', line: oldLines[i] });
+    i += 1;
+  }
+  while (j < m) {
+    ops.push({ op: 'insert', line: newLines[j] });
+    j += 1;
+  }
+  return ops;
+}
+
+function unifiedDiff(oldText, newText, relPath) {
+  const oldNorm = String(oldText || '').replace(/\r\n/g, '\n');
+  const newNorm = String(newText || '').replace(/\r\n/g, '\n');
+  if (oldNorm === newNorm) return '';
+
+  const oldLines = splitLinesForDiff(oldNorm);
+  const newLines = splitLinesForDiff(newNorm);
+  const ops = lcsLineOps(oldLines, newLines);
+
+  const out = [];
+  out.push(`--- a/${relPath}`);
+  out.push(`+++ b/${relPath}`);
+  out.push(`@@ -1,${oldLines.length} +1,${newLines.length} @@`);
+  for (const o of ops) {
+    const prefix = o.op === 'equal' ? ' ' : o.op === 'delete' ? '-' : '+';
+    out.push(prefix + o.line);
+  }
+  return out.join('\n') + '\n';
+}
+
+function techStackFromBlueprint(blueprint) {
+  const repo = blueprint.repo || {};
+  const caps = blueprint.capabilities || {};
+
+  const layout = repo.layout || 'single';
+  const language = repo.language || 'unknown';
+  const packageManager = repo.packageManager || 'unknown';
+
+  const frontend = caps.frontend?.enabled ? (caps.frontend?.framework || 'TBD') : 'none';
+  const backend = caps.backend?.enabled ? (caps.backend?.framework || 'TBD') : 'none';
+  const database = caps.database?.enabled ? (caps.database?.kind || 'TBD') : 'none';
+  const api = (caps.api && typeof caps.api === 'object' && typeof caps.api.style === 'string') ? caps.api.style : 'none';
+
+  return { layout, language, packageManager, frontend, backend, database, api };
+}
+
+function renderAgentsTechStackSection(blueprint) {
+  const ts = techStackFromBlueprint(blueprint);
+  return [
+    '| Category | Value |',
+    '|----------|-------|',
+    `| Language | ${ts.language} |`,
+    `| Package manager | ${ts.packageManager} |`,
+    `| Repo layout | ${ts.layout} |`,
+    `| Frontend | ${ts.frontend} |`,
+    `| Backend | ${ts.backend} |`,
+    `| Database | ${ts.database} |`,
+    `| API style | ${ts.api} |`,
+  ];
+}
+
+function deriveProjectDirectories(blueprint) {
+  const repo = blueprint.repo || {};
+  const layout = String(repo.layout || 'single').toLowerCase();
+  if (layout === 'monorepo') {
+    return [
+      { dir: '`apps/`', purpose: 'Applications', entry: '-' },
+      { dir: '`packages/`', purpose: 'Shared packages', entry: '-' },
+    ];
+  }
+  return [{ dir: '`src/`', purpose: 'Application source code', entry: '-' }];
+}
+
+function parseKeyDirectoriesTable(lines, sectionStartIdx) {
+  // Find first table row after the "## Key Directories" heading.
+  let tableStart = -1;
+  for (let i = sectionStartIdx + 1; i < lines.length; i += 1) {
+    const t = lines[i].trim();
+    if (/^##\s+/.test(t)) break;
+    if (t.startsWith('|')) {
+      tableStart = i;
+      break;
+    }
+  }
+  if (tableStart < 0) return { tableStart: -1, tableEnd: -1, rows: [] };
+
+  let tableEnd = tableStart;
+  for (let i = tableStart; i < lines.length; i += 1) {
+    if (!lines[i].trim().startsWith('|')) break;
+    tableEnd = i;
+  }
+
+  const rows = [];
+  // Skip header + separator (first 2 lines).
+  for (let i = tableStart + 2; i <= tableEnd; i += 1) {
+    const raw = lines[i];
+    const cells = raw.split('|').map((c) => c.trim()).filter((c) => c.length > 0);
+    if (cells.length < 3) continue;
+    rows.push({ dir: cells[0], purpose: cells[1], entry: cells[2] });
+  }
+
+  return { tableStart, tableEnd, rows };
+}
+
+function upsertSection(lines, headingRegex, newSectionLines, insertAfterRegex) {
+  const headingIdx = lines.findIndex((l) => headingRegex.test(l.trim()));
+  if (headingIdx >= 0) {
+    let endIdx = lines.length;
+    for (let i = headingIdx + 1; i < lines.length; i += 1) {
+      if (/^##\s+/.test(lines[i].trim())) {
+        endIdx = i;
+        break;
+      }
+    }
+    const before = lines.slice(0, headingIdx);
+    const after = lines.slice(endIdx);
+    return { lines: [...before, ...newSectionLines, ...after], changed: true };
+  }
+
+  const insertAfterIdx = lines.findIndex((l) => insertAfterRegex.test(l.trim()));
+  if (insertAfterIdx < 0) {
+    return { lines: [...lines, '', ...newSectionLines], changed: true };
+  }
+  let insertEnd = lines.length;
+  for (let i = insertAfterIdx + 1; i < lines.length; i += 1) {
+    if (/^##\s+/.test(lines[i].trim())) {
+      insertEnd = i;
+      break;
+    }
+  }
+  const before = lines.slice(0, insertEnd);
+  const after = lines.slice(insertEnd);
+  return { lines: [...before, '', ...newSectionLines, ...after], changed: true };
+}
+
+function upsertManagedBlock(raw, start, end, content) {
+  const block = String(content || '').trimEnd();
+  if (!raw.includes(start) || !raw.includes(end)) {
+    return (raw || '').trimEnd() + `\n\n${start}\n${block}\n${end}\n`;
+  }
+  const before = raw.split(start)[0];
+  const after = raw.split(end)[1];
+  return `${before}${start}\n${block}\n${end}${after}`;
+}
+
+function renderUpdatedRootAgentsMd(raw, blueprint) {
+  const project = blueprint.project || {};
+  const projectName = String(project.name || 'my-project').trim() || 'my-project';
+  const projectDescription = String(project.description || 'Project description').trim() || 'Project description';
+
+  const normalized = String(raw || '').replace(/\r\n/g, '\n');
+  let lines = normalized.split('\n');
+
+  // Replace everything between the top title and "## Project Type" with a project summary line.
+  const titleIdx = lines.findIndex((l) => /^#\s+/.test(l.trim()));
+  const projectTypeIdx = lines.findIndex((l) => /^##\s+Project Type\b/.test(l.trim()));
+  if (titleIdx >= 0 && projectTypeIdx > titleIdx) {
+    const before = lines.slice(0, titleIdx + 1);
+    const after = lines.slice(projectTypeIdx);
+    lines = [...before, '', `**${projectName}** — ${projectDescription}`, '', ...after];
+  }
+
+  // Update "## Project Type" section body.
+  {
+    const headingIdx = lines.findIndex((l) => /^##\s+Project Type\b/.test(l.trim()));
+    if (headingIdx >= 0) {
+      let endIdx = lines.length;
+      for (let i = headingIdx + 1; i < lines.length; i += 1) {
+        if (/^##\s+/.test(lines[i].trim())) {
+          endIdx = i;
+          break;
+        }
+      }
+      const before = lines.slice(0, headingIdx + 1);
+      const after = lines.slice(endIdx);
+      lines = [...before, '', `${projectName} - ${projectDescription}`, '', ...after];
+    }
+  }
+
+  // Upsert "## Tech Stack" after "## Project Type".
+  {
+    const techStackSection = [
+      '## Tech Stack',
+      '',
+      ...renderAgentsTechStackSection(blueprint),
+      '',
+    ];
+    const res = upsertSection(lines, /^##\s+Tech Stack\b/, techStackSection, /^##\s+Project Type\b/);
+    lines = res.lines;
+  }
+
+  // Update "## Key Directories" table (add code dirs first, preserve existing rows).
+  {
+    const keyDirIdx = lines.findIndex((l) => /^##\s+Key Directories\b/.test(l.trim()));
+    if (keyDirIdx >= 0) {
+      const parsed = parseKeyDirectoriesTable(lines, keyDirIdx);
+      if (parsed.tableStart >= 0) {
+        const existingRows = parsed.rows;
+        const existingByDir = new Map(existingRows.map((r) => [r.dir, r]));
+
+        const derived = deriveProjectDirectories(blueprint);
+        const mergedRows = [];
+        for (const r of derived) {
+          if (!existingByDir.has(r.dir)) mergedRows.push(r);
+        }
+        for (const r of existingRows) mergedRows.push(r);
+
+        const tableLines = [
+          '| Directory | Purpose | Entry Point |',
+          '|-----------|---------|-------------|',
+          ...mergedRows.map((r) => `| ${r.dir} | ${r.purpose} | ${r.entry} |`),
+        ];
+
+        const before = lines.slice(0, keyDirIdx + 1);
+        const after = lines.slice(parsed.tableEnd + 1);
+        lines = [...before, '', ...tableLines, '', ...after];
+      }
+    }
+  }
+
+  let next = lines.join('\n').trimEnd() + '\n';
+
+  // Update managed DB SSOT block if present.
+  try {
+    const start = '<!-- DB-SSOT:START -->';
+    const end = '<!-- DB-SSOT:END -->';
+    const mode = dbSsotMode(blueprint);
+    const block = renderDbSsotAgentsBlock(mode).trimEnd();
+    next = upsertManagedBlock(next, start, end, block);
+  } catch {
+    // ignore
+  }
+
+  next = next.replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+  return next;
 }
 
 function copyFileIfMissing(srcPath, destPath, apply) {
@@ -2247,10 +2574,16 @@ function main() {
       console.log('\n== Stage C Completion Checkpoint ==\n');
       console.log('Stage C completed (scaffold + skills written).');
       console.log('Next: user confirmation that scaffold and enabled capabilities match expectations.');
-      console.log('After confirmation, run:');
+      console.log('Before approving Stage C:');
+      console.log('- Required: fill init/skill-retention-table.template.md and confirm skill retention');
+      console.log(`  node ${self} skill-retention --repo-root ${repoRoot}`);
+      console.log('  (If deletions are listed, apply them:)');
+      console.log(`  node ${self} skill-retention --repo-root ${repoRoot} --apply`);
+      console.log('- Optional: update root README.md and AGENTS.md from the blueprint (shows diff; requires --apply)');
+      console.log(`  node ${self} update-root-docs --repo-root ${repoRoot}`);
+      console.log(`  node ${self} update-root-docs --repo-root ${repoRoot} --apply`);
+      console.log('After user approval, run:');
       console.log(`  node ${self} approve --stage C --repo-root ${repoRoot}`);
-      console.log('Post-init: fill init/skill-retention-table.template.md and confirm deletions before running sync-skills.mjs --delete-skills (dry-run, then --yes).');
-      console.log('Post-init: update root README.md and AGENTS.md if needed.');
       console.log('\nOptional: later run cleanup-init --apply --i-understand to remove the init/ directory');
       process.exit(0);
     }
@@ -2307,6 +2640,10 @@ function main() {
 	    if (desired === 'C') {
 	      if (!state['stage-c']?.wrappersSynced) {
 	        die('[error] Stage C is not complete. Run apply first.');
+	      }
+	      if (!state['stage-c']?.skillRetentionReviewed) {
+	        const self = path.relative(repoRoot, __filename);
+	        die(`[error] Skill retention not confirmed. Run: node ${self} skill-retention --repo-root ${repoRoot}`);
 	      }
 	      state['stage-c'].userApproved = true;
 	      state.stage = 'complete';
@@ -2423,6 +2760,90 @@ if (command === 'validate') {
 	    process.exit(0);
 	  }
 
+  if (command === 'skill-retention') {
+    const apply = !!opts['apply'];
+    const fileOpt = opts['file'] || path.join('init', 'skill-retention-table.template.md');
+    const tablePath = resolvePath(repoRoot, fileOpt);
+
+    const state = loadState(repoRoot);
+    if (!state) die('[error] No init state found. Run the "start" command first.');
+
+    if (String(state.stage || '').toUpperCase() !== 'C') {
+      die(`[error] skill-retention is only valid during Stage C (current stage=${state.stage}).`);
+    }
+    if (!state['stage-c']?.wrappersSynced) {
+      die('[error] Stage C is not complete. Run apply first.');
+    }
+
+    // Ensure the table exists (copy from template if missing and using the default path)
+    if (!fs.existsSync(tablePath)) {
+      ensureSkillRetentionTemplate(repoRoot, true);
+    }
+    if (!fs.existsSync(tablePath)) {
+      die(`[error] Skill retention table not found: ${path.relative(repoRoot, tablePath)}`);
+    }
+
+    const content = fs.readFileSync(tablePath, 'utf8');
+    const parsed = parseSkillRetentionDeletionList(content);
+    const deletions = parsed.deletions;
+
+    let sync = { op: 'skip', mode: 'skipped', reason: 'no deletions listed' };
+    if (deletions.length > 0) {
+      const syncScript = path.join(repoRoot, '.ai', 'scripts', 'sync-skills.mjs');
+      if (!fs.existsSync(syncScript)) {
+        die(`[error] sync-skills.mjs not found: ${path.relative(repoRoot, syncScript)}`);
+      }
+
+      const cmd = 'node';
+      const args = [
+        syncScript,
+        '--providers',
+        'both',
+        '--delete-skills',
+        deletions.join(','),
+        '--delete-scope',
+        'all',
+        '--clean-empty',
+        '--update-meta',
+      ];
+      if (apply) args.push('--yes');
+      else args.push('--dry-run');
+
+      if (format !== 'json') {
+        console.log(`[info] Skill retention file: ${path.relative(repoRoot, tablePath)}`);
+        for (const w of parsed.warnings) console.warn(`[warn] ${w}`);
+        console.log(`[info] Deletions (${deletions.length}):`);
+        for (const d of deletions) console.log(`- ${d}`);
+      }
+
+      const res = childProcess.spawnSync(cmd, args, { stdio: 'inherit', cwd: repoRoot });
+      if (res.status !== 0) die(`[error] sync-skills.mjs failed with exit code ${res.status}`);
+      sync = { op: 'run', cmd: `${cmd} ${args.join(' ')}`, mode: apply ? 'applied' : 'dry-run' };
+    } else if (format !== 'json') {
+      console.log(`[info] Skill retention file: ${path.relative(repoRoot, tablePath)}`);
+      for (const w of parsed.warnings) console.warn(`[warn] ${w}`);
+      console.log('[info] No deletions listed under "## Deletion List".');
+    }
+
+    if (!state['stage-c']) state['stage-c'] = {};
+    state['stage-c'].skillRetentionReviewed = true;
+    addHistoryEvent(state, 'skill_retention_reviewed', apply ? 'Skill retention reviewed (apply)' : 'Skill retention reviewed (dry-run)');
+    saveState(repoRoot, state);
+
+    const result = {
+      ok: true,
+      file: path.relative(repoRoot, tablePath),
+      deletions,
+      warnings: parsed.warnings,
+      sync,
+      summary: apply
+        ? '[ok] Skill retention confirmed (applied when deletions listed).'
+        : '[ok] Skill retention confirmed (dry-run when deletions listed).',
+    };
+    printResult(result, format);
+    process.exit(0);
+  }
+
   if (command === 'suggest-packs') {
     if (!blueprintPath) die('[error] --blueprint is required for suggest-packs');
     const blueprint = readJson(blueprintPath);
@@ -2524,6 +2945,79 @@ if (command === 'validate') {
     process.exit(0);
   }
 
+  if (command === 'update-root-docs') {
+    if (!blueprintPath) die('[error] --blueprint is required for update-root-docs');
+    const apply = !!opts['apply'];
+    const blueprint = readJson(blueprintPath);
+
+    const v = validateBlueprint(blueprint);
+    if (!v.ok) die('[error] Blueprint is not valid; refusing to update root docs.');
+
+    const readmePath = path.join(repoRoot, 'README.md');
+    const agentsPath = path.join(repoRoot, 'AGENTS.md');
+
+    const readmeRender = generateProjectReadme(repoRoot, blueprint, false);
+    if (readmeRender.op === 'skip') die('[error] README template not found; cannot update README.md');
+
+    const currentReadme = fs.existsSync(readmePath) ? fs.readFileSync(readmePath, 'utf8') : '';
+    const desiredReadme = readmeRender.content || '';
+
+    const currentAgents = fs.existsSync(agentsPath) ? fs.readFileSync(agentsPath, 'utf8') : '';
+    const desiredAgents = renderUpdatedRootAgentsMd(currentAgents, blueprint);
+
+    const readmeDiff = unifiedDiff(currentReadme, desiredReadme, path.relative(repoRoot, readmePath));
+    const agentsDiff = unifiedDiff(currentAgents, desiredAgents, path.relative(repoRoot, agentsPath));
+
+    const changed = { readme: readmeDiff.length > 0, agents: agentsDiff.length > 0 };
+
+    if (format === 'json') {
+      const out = {
+        ok: true,
+        apply,
+        blueprint: path.relative(repoRoot, blueprintPath),
+        changed,
+        diff: {
+          'README.md': readmeDiff,
+          'AGENTS.md': agentsDiff,
+        },
+      };
+      if (apply) {
+        if (changed.readme) fs.writeFileSync(readmePath, desiredReadme, 'utf8');
+        if (changed.agents) fs.writeFileSync(agentsPath, desiredAgents, 'utf8');
+        out.wrote = {
+          'README.md': changed.readme ? path.relative(repoRoot, readmePath) : null,
+          'AGENTS.md': changed.agents ? path.relative(repoRoot, agentsPath) : null,
+        };
+      }
+      console.log(JSON.stringify(out, null, 2));
+      process.exit(0);
+    }
+
+    if (!changed.readme && !changed.agents) {
+      console.log('[ok] Root docs are already up-to-date.');
+      process.exit(0);
+    }
+
+    if (readmeDiff) {
+      console.log(readmeDiff.trimEnd());
+      console.log('');
+    }
+    if (agentsDiff) {
+      console.log(agentsDiff.trimEnd());
+      console.log('');
+    }
+
+    if (!apply) {
+      console.log('[info] Re-run with --apply after explicit approval to write README.md and AGENTS.md.');
+      process.exit(0);
+    }
+
+    if (changed.readme) fs.writeFileSync(readmePath, desiredReadme, 'utf8');
+    if (changed.agents) fs.writeFileSync(agentsPath, desiredAgents, 'utf8');
+    console.log('[ok] Root docs updated: README.md, AGENTS.md');
+    process.exit(0);
+  }
+
   if (command === 'apply') {
     if (!blueprintPath) die('[error] --blueprint is required for apply');
     const providers = opts['providers'] || 'both';
@@ -2573,14 +3067,6 @@ if (command === 'validate') {
         const reason = r.reason ? ` [${r.reason}]` : '';
         console.log(`  - ${r.action}: ${r.file}${mode}${reason}`);
       }
-    }
-
-    // Generate project-specific README.md
-    const readmeResult = generateProjectReadme(repoRoot, blueprint, true);
-    if (readmeResult.op === 'write' && readmeResult.mode === 'applied') {
-      console.log('[ok] README.md generated from blueprint.');
-    } else if (readmeResult.reason) {
-      console.log(`[info] README.md: ${readmeResult.reason}`);
     }
 
     const featureOptions = { force: forceFeatures, verify: verifyFeatures };
@@ -2701,10 +3187,6 @@ if (command === 'validate') {
     if (dbSsotConfigResult.mode === 'applied') {
       console.log(`[ok] DB SSOT config written: ${path.relative(repoRoot, dbSsotConfigResult.path)}`);
     }
-    const agentsDbSsotResult = patchRootAgentsDbSsotSection(repoRoot, blueprint, true);
-    if (agentsDbSsotResult.mode === 'applied') {
-      console.log(`[ok] AGENTS.md updated (DB SSOT section)`);
-    }
     const dbContextRefreshResult = refreshDbContextContract(repoRoot, blueprint, true, verifyFeatures);
     if (dbContextRefreshResult.mode === 'applied') {
       console.log(`[ok] DB context refreshed: ${path.relative(repoRoot, dbContextRefreshResult.path)}`);
@@ -2772,13 +3254,14 @@ if (command === 'validate') {
         scaffold: scaffoldPlan,
         configs: configResults,
         dbSsotConfig: dbSsotConfigResult,
-        agentsDbSsot: agentsDbSsotResult,
         dbContextContract: dbContextRefreshResult,
         dbSsotSkillExclusions: ssotSkillExclusionsResult,
-        readme: readmeResult,
         skillRetentionTemplate: retentionTemplateResult,
         manifest: manifestResult,
         sync: syncResult,
+        rootDocs: {
+          note: 'Use update-root-docs to preview/apply README.md + AGENTS.md updates (requires explicit approval).',
+        },
         cleanup: cleanupResult
       }, null, 2))
     } else {
@@ -2812,6 +3295,7 @@ if (command === 'validate') {
       }
       console.log(`- Manifest updated: ${path.relative(repoRoot, manifestResult.path)}`)
       console.log(`- Wrappers synced via: ${syncResult.cmd || '(skipped)'}`)
+      console.log(`- Root docs: run update-root-docs to preview/apply README.md + AGENTS.md`)
       if (cleanupResult) console.log(`- init/ cleanup: ${cleanupResult.mode}`)
     }
 

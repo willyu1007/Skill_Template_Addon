@@ -71,7 +71,38 @@ These are provider-agnostic placeholders intended to be extended.
 
 ## User approval checkpoint (complete init)
 
-After reviewing the resulting scaffold/configs/skills changes, record approval and mark init complete:
+After reviewing the resulting scaffold/configs/skills changes, complete the Stage C checkpoint items, then record approval and mark init complete.
+
+### Stage C checkpoint items (before approval)
+
+**Required: Skill retention**
+
+- Edit `init/skill-retention-table.template.md` and list deletions under `## Deletion List`.
+- Preview deletions:
+
+```bash
+node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs skill-retention --repo-root .
+```
+
+- After confirmation, apply deletions (if any):
+
+```bash
+node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs skill-retention --repo-root . --apply
+```
+
+**Optional: Update root docs from blueprint**
+
+- Preview diff:
+
+```bash
+node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs update-root-docs --repo-root .
+```
+
+- After explicit approval, apply:
+
+```bash
+node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs update-root-docs --repo-root . --apply
+```
 
 ```bash
 node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs approve --stage C --repo-root .

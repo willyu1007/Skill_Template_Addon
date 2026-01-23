@@ -15,7 +15,7 @@
 - If the user cannot decide, record it as **TBD** in `init/stage-a-docs/risk-open-questions.md` with:
   - owner, options, and decision due.
 
-> **Note**: After initialization completes, use `cleanup-init --archive` to move these files to `docs/project/` for long-term retention.
+> **Note**: After initialization completes, use `cleanup-init --archive` to move these files to `docs/project/overview/` for long-term retention.
 
 ## A. MUST-ask (minimal set)
 
@@ -129,8 +129,8 @@ During initialization (working location):
 - Repo layout/pack selection decisions → `init/project-blueprint.json`
 
 After completion (archived to):
-- Stage A docs → `docs/project/`
-- Blueprint → `docs/project/project-blueprint.json`
+- Stage A docs → `docs/project/overview/`
+- Blueprint → `docs/project/overview/project-blueprint.json`
 
 ## D. Feature Decision Prompts (ask when determining capabilities)
 

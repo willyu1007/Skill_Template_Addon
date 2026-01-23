@@ -88,7 +88,7 @@ During initialization, write the answers into these files (working location):
 - `init/stage-a-docs/domain-glossary.md` - domain glossary
 - `init/stage-a-docs/risk-open-questions.md` - risks and open questions
 
-> **Note**: After initialization completes, use `cleanup-init` to move these files to `docs/project/`.
+> **Note**: After initialization completes, use `cleanup-init --archive` to move these files to `docs/project/overview/`.
 
 ---
 
@@ -459,17 +459,19 @@ check capabilities
 
 ## Post-init: Record key info in AGENTS.md
 
-After the user approves the Stage C results (scaffold/config/packs/wrappers/`README.md`), explicitly ask:
+After the user approves the Stage C results (scaffold/config/packs/wrappers), explicitly ask:
 
-> Do you want to record the project type, tech stack, and key directories in the root `AGENTS.md`? (yes/no)
+> Do you want to update the root `README.md` + `AGENTS.md` from the blueprint? (yes/no)
 
-If user says "yes":
+If user says "yes", prefer using `update-root-docs` (diff preview, then apply):
 
-1. Update root `AGENTS.md` with project-specific facts from the blueprint.
-2. Preserve the template repo structure and constraints (Key Directories, Routing, Global Rules, `.ai/`, `dev-docs/`).
-3. Show a diff and request explicit approval before writing.
+```bash
+node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs update-root-docs --repo-root .
+# After explicit approval
+node init/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs update-root-docs --repo-root . --apply
+```
 
-If user says "no": proceed without changing `AGENTS.md`.
+If user says "no": proceed without changing root docs.
 
 ---
 
