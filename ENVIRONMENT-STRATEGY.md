@@ -434,7 +434,7 @@ policy:
 2. 在 Secrets Manager 中创建 3 个 Projects（按上文命名）。
 3. 做一次 key 兼容性测试（确认 `secret.key` 是否允许 `/`）：
    - 在 `<org>-<project>-dev` 创建 1 条 secret：
-     - `key=shared/llm/chat/api-key`
+     - `key=shared/llm/example/chat/api-key`
      - `value` 随便填临时值
    - （已验证）当前项目允许保存包含 `/` 的 key；v1 不需要 key 归一化。
 4. 为每个 env 建立第一批 secrets（建议先从最小集开始：DB、LLM、OAuth 等），并按 v1 规则填 `secret.key`：
@@ -483,7 +483,7 @@ policy:
 
 - `project/<env>/db/password`
 - `project/<env>/db/username`
-- `shared/llm/chat/api-key`
+- `shared/llm/<provider>/chat/api-key`
 
 > 更新（已对齐）：LLM 相关 secrets 从 v1 起固定使用：
 >
@@ -501,10 +501,10 @@ policy:
 **4.1) shared：第三方 LLM API key（v1 默认）**
 
 - v1 默认将第三方 LLM 的 API key 放入 `shared`，便于跨项目复用与统一轮换。
-- 建议按功能拆分对应的 `secret_ref`（与上文 LLM v1 最小集一致）：
-  - `llm/chat/api-key`
-  - `llm/embeddings/api-key`
-  - `llm/moderation/api-key`
+- 建议按 provider + 功能拆分对应的 `secret_ref`（与上文 LLM v1 最小集一致）：
+  - `llm/<provider>/chat/api-key`
+  - `llm/<provider>/embeddings/api-key`
+  - `llm/<provider>/moderation/api-key`
 - 若更偏向“最简复用”，也可以只维护一个 `llm/api-key` 并在三个功能上共用；后续再按功能拆分也保持兼容（新增 secret_ref，不影响旧配置）。
 
 **5) LLM 使用指引（如何提问更稳定）**
