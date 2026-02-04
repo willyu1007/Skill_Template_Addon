@@ -458,6 +458,7 @@ policy:
 
 - 安装（Windows，推荐本机安装）：
   - 从 Bitwarden 官方文档页面下载 `bws`（Secrets Manager CLI）Windows 版本压缩包并解压。
+    - 注意：你需要下载的是 **bws CLI** 的发布包（文件名类似 `bws-x86_64-pc-windows-msvc-<version>.zip`），不是 `Bitwarden.Secrets.Sdk.*.nupkg`（那是 .NET SDK 包）。
   - 将 `bws.exe` 放到固定目录（示例：`C:\Tools\bws\`）。
   - （可选）解除下载阻止：`Unblock-File C:\Tools\bws\bws.exe`
   - 将目录加入 PATH：
