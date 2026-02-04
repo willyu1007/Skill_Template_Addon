@@ -412,6 +412,7 @@ policy:
 - `secret.key` 采用“命名空间前缀 + secret_ref”形式：
   - `project/<env>/<secret_ref>`：环境隔离（`<env>` 为 `dev|staging|prod`）
   - `shared/<secret_ref>`：全局共享（跨 env；**物理上需在 dev/staging/prod 三个 Project 里各存一份相同的值**，以避免部署侧被迫访问“别的 env 的 Project”）
+- 说明：这里的 `project` 是**固定命名空间前缀**，不是 Bitwarden 的 Project 名，也不是你的实际项目名；你的实际项目名体现在 Bitwarden 的 Project（如 `mr-common-dev`）上。
 - `secret_ref` 的规范不变：`kebab-case + /` 分段、全小写、不包含 env（由 `project/<env>/...` 承载）。
 - `secret.key` 允许包含 `/`（已在当前项目验证可保存），因此 v1 直接按上述规则落地；无需引入 key 归一化规则。
 - 注：我们**不依赖** Bitwarden CLI 的 “run->环境变量名=key” 直接注入能力；由 `ops/secrets`/环境工具把 `secret_ref` 映射到实际环境变量名（如 `DB_PASSWORD`）后生成 `.env.local`/部署注入物。
@@ -453,6 +454,11 @@ policy:
 - **RDS（通常需要）**：
   - `project/<env>/db/password`：数据库密码（secret）
   - `project/<env>/db/username`：数据库用户名（是否视为 secret 由你们决定；保守起见可按 secret）
+  - **多个 DB 的命名（v1 建议）**：
+    - 主库/默认库保持现有键：`project/<env>/db/password`、`project/<env>/db/username`（兼容你们已创建的 secrets）
+    - 新增第二个及以上 DB：引入 DB 别名维度：`project/<env>/db/<db_alias>/password`、`project/<env>/db/<db_alias>/username`（可选 `url`）
+      - 例：`project/dev/db/analytics/password`、`project/prod/db/auth/url`
+      - `db_alias` 建议用用途/域名（如 `main`/`auth`/`analytics`），避免用随机编号
   - 非 secret 建议放 `env/values` / IaC outputs：`DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_SSL_MODE` 等
   - 若你们习惯用 “DATABASE_URL（包含口令）”：则将其作为 secret，例如 `project/<env>/db/url`
 - **OSS（role-only 下通常不需要 secrets）**：
@@ -478,6 +484,12 @@ policy:
 - `project/<env>/db/password`
 - `project/<env>/db/username`
 - `shared/llm/chat/api-key`
+
+> 更新（已对齐）：LLM 相关 secrets 从 v1 起固定使用：
+>
+> `shared/llm/<provider>/<function>/api-key`
+>
+> 其中 `<function>` 推荐从 `chat|embeddings|moderation` 起步；`<provider>` 与 `env/values/<env>.yaml` 的 provider 选择保持一致（例如 `LLM_CHAT_PROVIDER=openai` 对应 `shared/llm/openai/chat/api-key`）。
 
 **4) 可选的 shared 权限边界（仅在需要时）**
 
