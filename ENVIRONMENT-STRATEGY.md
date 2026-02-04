@@ -350,25 +350,26 @@ policy:
   - `role-only`：发现 `ak_env` 或可能污染默认凭证链的 credentials/profile 文件 => fail；同时如果 role/STS 链路不可用（例如元数据不可达且无 `sts_env`）=> fail。
   - `auto`：默认 warn；若策略未显式允许 fallback，则在 role/STS 链路不可用时 fail（避免无意间使用 AK）。
 
-### M. secrets 值 SSOT：云端统一（含 dev），支持 shared secrets/roles
+### M. secrets 值 SSOT：外部统一（v1：Bitwarden），支持 shared secrets/roles
 
-- **结论**：secrets 的“值”以云端为 SSOT（优先便利性与多项目复用），`dev/staging/prod` 均可上云统一管理；repo 侧只维护契约与引用（`secret_ref` / 逻辑名 / 元数据），不存明文。
-- **运行时取值**：
-  - `staging/prod(ECS)`：运行时使用 RAM Role/STS 拉取（符合 `role-only`），禁止通过环境变量注入长期 AK。
-  - `dev(local)`：允许通过“个人 bootstrap 身份”拉取（推荐拿到 STS 后再用），生成本地运行所需的 `.env.*.local`/secrets 文件（本地文件须 gitignore + 权限收紧）。
+- **结论（已对齐）**：secrets 的“值”以 **repo 外部** 的 secrets 系统为 SSOT（优先便利性与多项目复用）。v1 选择 **Bitwarden（免费版可先用于 2 人测试阶段）**；repo 侧只维护契约与引用（`secret_ref` / 逻辑名 / 元数据），不存明文。
+- **取值/注入策略（已对齐）**：
+  - `dev(local)`：开发者从 Bitwarden **pull** 仅 `dev + shared` 范围的 secrets，渲染生成 `.env.local`（gitignore + 权限收紧）后启动；启动前执行 preflight（避免 AK 注入/缺失关键 secret）。
+  - `staging/prod(ECS)`：ECS 运行时不直接访问 Bitwarden；由运维机/部署机从 Bitwarden **pull**，在“部署时”**push 注入**（生成 env-file/配置并重启服务）。ECS 运行时仍严格 `role-only` 访问云资源（RAM Role/STS），不依赖 Bitwarden token/AK。
+- **部署形态建议（v1）**：ECS 上优先 `docker compose`，并用 `systemd` 托管 compose（开机自启/自动重启）；注入文件优先使用 compose 的 `env_file`（例如 `/etc/<org>/<project>/<env>.env`）。
 - **shared**：
   - 允许存在 shared secrets 与 shared roles，但前提是云端侧保证**权限要求一致**（否则应拆回项目级 secrets，避免“共享导致最小权限被抬高”）。
   - shared secrets 默认采用**全局一份**（一个逻辑 secret/一个值，跨环境复用）；如果未来需要区分环境值，应拆回项目/环境级 secret，而不是在 shared 下做隐式分叉（避免误用）。
   - 建议在命名空间层面区分 `project` vs `shared`（具体命名规则后续补齐到策略/IaC 规范）。
 - **关于“本地是否还需要维护 SSOT”**：
   - 即使 secrets 与 roles 都在云端“存在”，本地仍需要维护 *配置接口层* 的 SSOT：配置契约（有哪些键/哪些是 secret）、secret 引用（`secret_ref`）、以及策略（AK vs role、preflight、合并规则）。否则就只能把这些“规则/映射”迁移到云端的另一套配置系统（引入 bootstrap 依赖与可审计性成本）。
-  - 因此我们建议的清晰边界是“**SSOT 分层**”：云端 SSOT（secrets 值与审计/版本）+ repo SSOT（契约/引用/策略）+ IaC SSOT（角色/权限/信任关系，以代码表达并 apply 到云端）。
+- 因此我们建议的清晰边界是“**SSOT 分层**”：外部 secrets SSOT（secrets 值与审计/版本；v1=Bitwarden）+ repo SSOT（契约/引用/策略）+ IaC SSOT（角色/权限/信任关系，以代码表达并 apply 到云端）。
 
-#### secrets 云端命名规范（建议；dev/staging/prod 分层 + 多项目复用）
+#### secrets 命名规范（建议；dev/staging/prod 分层 + 多项目复用）
 
-> 目标：让同一套 `secret_ref` 在多个项目里复用，并且能用**前缀匹配**写 RAM 权限（最小权限、可审计）。
+> 目标：让同一套 `secret_ref` 在多个项目里复用，并且能用**可推导的命名与分层**做最小权限与可审计访问控制（不绑定具体 secrets 产品）。
 
-**1) 统一的“云端 secret 名称”模板（推荐）**
+**1) 统一的“secret 逻辑路径”模板（推荐）**
 
 - `project` secrets（按 env 分层）：
   - `/<org>/<project>/<env>/<secret_ref>`
@@ -386,12 +387,12 @@ policy:
 - 字符集建议：`a-z 0-9 / -`（尽量避免大写、空格、`.`），保证跨云/跨工具兼容。
 - 不把 `env` 编进 `secret_ref`（由模板中的 `<env>` 分层承载）。
 
-**3) RAM 权限（最小权限，按前缀约束）**
+**3) 访问控制（最小权限，按分层约束）**
 
-- `runtime-reader (staging)`：允许读取 `/<org>/<project>/staging/*` + 必要的 `/<org>/shared/*`
-- `runtime-reader (prod)`：允许读取 `/<org>/<project>/prod/*` + 必要的 `/<org>/shared/*`
 - `dev-reader (local)`：允许读取 `/<org>/<project>/dev/*` + 必要的 `/<org>/shared/*`
-- `secrets-writer/rotator`（运维）：“写入/轮换”权限与“运行时只读”权限分离；写入侧按需覆盖对应前缀（避免把 writer 能力发到运行时）。
+- `ops-deploy (staging/prod)`：允许读取 `/<org>/<project>/(staging|prod)/*` + 必要的 `/<org>/shared/*`
+- `secrets-writer/rotator`（运维）：“写入/轮换”权限与“读取/部署”权限分离；写入侧按需覆盖对应前缀（避免把 writer 能力发到运行时）。
+- `runtime (ECS)`：v1 不授予读取 Bitwarden 的能力（避免在运行时引入新 token/解密钥）；运行时只通过已注入的 env/config 读取业务 secrets。
 
 **4) 可选的 shared 权限边界（仅在需要时）**
 
@@ -480,7 +481,8 @@ keys=[DB_PASSWORD, LLM_API_KEY, OAUTH_CLIENT_SECRET]
 #### v1 建议的权限包拆分（概念级；具体 Action/Resource 由 IaC 生成）
 
 - `secrets:read`：
-  - 允许读取 `/<org>/<project>/<env>/*` + 必要的 `/<org>/shared/*`（或 `shared/runtime/*`，若启用）
+  - （适用于“运行时直接从云端 secrets 拉取”的方案）允许读取 `/<org>/<project>/<env>/*` + 必要的 `/<org>/shared/*`（或 `shared/runtime/*`，若启用）。
+  - （v1=Bitwarden）运行时不直接访问 Bitwarden，因此不需要给 runtime 侧配置该类“secrets:read”能力；读取权限由 Bitwarden 的 vault/collection 控制，部署时注入到 env/config。
 - `oss:app-buckets`：
   - 只允许访问指定 bucket（v1 不做 object prefix 白名单）
   - 最小动作集一般是：`list`（限定前缀）、`get`（v1 默认 read-only；如后续确需写入，建议通过拆 workload/拆 role 的方式新增 write 包）
@@ -504,7 +506,7 @@ keys=[DB_PASSWORD, LLM_API_KEY, OAUTH_CLIENT_SECRET]
   - 留痕归档：`ops/secrets/handbook/`（只存元信息与证据，不存 secret 值）
 - **与 IaC 的边界**：
   - `ops/iac/`：创建/管理 secrets 容器、roles、权限策略、信任关系（不写 secret 值）。
-  - `ops/secrets/`：写入/轮换 secret 值（写入云端 SSOT）、多账号分发/同步（如需要），并留痕。
+  - `ops/secrets/`：写入/轮换 secret 值（v1=Bitwarden）、多账号分发/同步（如需要），并留痕。
 
 ### S. IaC 执行模型 v1：`plan` 走 CI，`apply` 走人工
 
@@ -515,25 +517,19 @@ keys=[DB_PASSWORD, LLM_API_KEY, OAUTH_CLIENT_SECRET]
   - `apply` 必须基于已审阅的 `plan`/ChangeSet（同一次变更输入），避免“plan 与 apply 不一致”。
   - 证据归档：CI 产出 `plan` 结果作为 artifact；人工在 `apply` 前后将“plan 证据链接/摘要 + apply 结果”归档到 `ops/iac/handbook/`（不写任何 secret 值）。
 
-### T. `dev(local)` 拉取云端 secrets：以便利性为主的 bootstrap 身份与 STS 缓存（v1）
+### T. `dev(local)` 拉取外部 secrets（v1=Bitwarden）：以便利性为主的本地注入（`.env.local`）
 
-- **目标**：让开发者“开箱即用”拉取 `dev` 与 `shared` secrets，同时避免把长期 AK 注入到运行时/项目环境文件里。
-- **推荐身份链（优先顺序）**：
-  1. **SSO（首选）→ AssumeRole/STS**：开发者通过 SSO 登录获取短期凭证，再 Assume `dev-reader`（或等价只读 role）拉取 secrets。
-  2. **RAM User（次选）→ AssumeRole/STS**：仅用于暂无 SSO 的组织；要求最小权限 + MFA，且 RAM User 不直接读取 secrets，必须通过 AssumeRole 获取 STS 再读取。
-- **本地缓存策略（v1 允许）**：
-  - **允许缓存 STS**（短期凭证）以提升体验（减少频繁登录/交互），缓存位置使用云 SDK/CLI 的标准凭证存储（profiles），避免写入 repo。
-  - **不缓存长期 AK 到项目运行环境**：即使使用 RAM User 引导，也只在“获取 STS 的步骤”使用；最终 `.env.dev.local` 等运行配置只注入必要的业务 secrets/第三方 key，不注入云厂商长期 AK。
-- **最小权限边界（v1 默认）**：
-  - `dev-reader`：只允许读取 `/<org>/<project>/dev/*` + `/<org>/shared/*`；显式禁止读取 `staging/prod` 前缀（避免误拉取生产值到本地）。
-  - 若未来启用 `/<org>/shared/runtime/*` vs `/<org>/shared/ops/*`：`dev-reader` 只读 `shared/runtime/*`，不读 `shared/ops/*`（更安全，但会增加一点命名复杂度）。
-- **多账号 profile 命名（v1 默认）**：
-  - profile 只表达“账号/租户”，不编码 `env`（`env` 由 secrets 路径中的 `<env>` 分层承载）。
-  - 推荐格式：`<org>-<account-alias>`（全小写，`a-z0-9-`），示例：`acme-dev`、`acme-prod`、`acme-shared`。
-  - 如果需要区分多个主账号下的同名 alias，可扩展为：`<org>-<account-alias>-<short-id>`（短码由你们约定，保持可读）。
-- **多账号**：
-  - 多账号下通过 profile/账号别名切换；策略与命名保持一致（同 `secret_ref` / 同路径模板），只是目标账号不同。
-  - `shared` secrets 建议在每个账号复制一份（同命名路径），本地拉取时按“当前目标账号 + 当前 env”取值。
+- **目标**：让开发者“开箱即用”获取 `dev` 与 `shared` 的业务 secrets，并把它们稳定注入到 `.env.local`；同时不把任何云厂商长期 AK 注入到运行时/项目环境文件里。
+- **基本流程（v1）**：
+  1. 开发者登录 Bitwarden（桌面端/浏览器插件/CLI 均可），拥有 `dev + shared` 的只读权限。
+  2. 执行 `ops/secrets` 的渲染脚本：按 `secret_ref` 清单拉取值并生成 `.env.local`（确保 gitignore + 权限收紧）。
+  3. 启动应用；启动前执行 preflight（避免把 AK/credentials 文件注入到 role-only 场景；同时检查必需 secret_ref 是否齐全）。
+- **访问边界（v1 默认）**：
+  - 开发者只拿到 `dev + shared` 的读取权限；不允许读取 `staging/prod` 值。
+  - `staging/prod(ECS)` 的值只由运维/部署机在部署时拉取并注入；运行时不直接访问 Bitwarden。
+- **本地缓存/凭证存放（v1 原则）**：
+  - Bitwarden 的登录态/会话 token 只保留在开发者机器的标准位置（由 Bitwarden 工具管理），不写入 repo。
+  - `.env.local` 只存业务 secrets（第三方 key/连接串等），不注入云厂商长期 AK；云资源访问统一走 role/STS 链路。
 
 ### U. `ops/*/handbook/` 留痕模板：常见字段（v1 默认）
 
@@ -622,7 +618,7 @@ notes: "Applied after review; no secrets included."
   - outputs 是“显式接口”：可以刻意只暴露非敏感、稳定的字段；比解析整份 state 更安全、更可控。
   - 多账号也可复用：同一套命名规范 + 不同账号的 stack/workspace 对应不同 outputs。
 - **需要注意的坑**：
-  - **不要把 secrets 写进 IaC/state/outputs**（我们已决定 secrets 值云端 SSOT；IaC 只管容器与权限），否则 state 会变成敏感数据载体。
+  - **不要把 secrets 写进 IaC/state/outputs**（secrets 值 SSOT=v1 Bitwarden；IaC 只管容器与权限），否则 state 会变成敏感数据载体。
   - outputs 仍可能包含敏感元信息（如内部域名/资源 ID），需要按最小可用原则输出，并限制读取权限（主要给 CI plan 与 ops apply）。
 - **`env/inventory/<env>.yaml` 的定位（建议）**：
   - 不作为 SSOT；仅在“资源不由 IaC 管理”或“迁移/过渡期”作为临时 overlay（并明确过期/删除计划）。
@@ -650,7 +646,7 @@ notes: "Applied after review; no secrets included."
    - runtime：`<org>-<project>-runtime-<env>`
    - 控制面：`<org>-<project>-iac-executor`、`<org>-<project>-secrets-writer`
 6. secrets 运维（写入/轮换）：
-   - v1 默认人工在本地/运维机执行；留痕归档到 `ops/secrets/handbook/`
+   - v1 默认人工在本地/运维机执行；SSOT 使用 Bitwarden；留痕归档到 `ops/secrets/handbook/`
 7. IaC 执行模型：
    - `plan` 走 CI；`apply` 走人工（本地/运维机）
 8. `dev(local)` bootstrap 身份：
@@ -660,9 +656,9 @@ notes: "Applied after review; no secrets included."
 >
 > 更新：策略 SSOT 已统一为 `docs/project/policy.yaml`（见上文 “J”）；`docs/project/env-ssot.json` 仅用于声明 env SSOT 模式（如 `repo-env-contract`）。
 
-## 线上实例是否可以“本地文件维护 secrets”（可选方案；默认云端 SSOT）
+## 线上实例是否可以“本地文件维护 secrets”（可选方案；默认外部 SSOT=v1 Bitwarden）
 
-可以，但在我们已决定“secrets 值云端 SSOT”的前提下，它更适合作为**特殊场景/过渡方案**；并且需要作为运维系统能力对待：
+可以，但在我们已决定“secrets 值外部 SSOT（v1 Bitwarden）”的前提下，它更适合作为**特殊场景/过渡方案**；并且需要作为运维系统能力对待：
 
 - 需要明确：分发方式、文件权限（0600/属主）、轮换机制、审计与回滚、实例扩缩容一致性。
 - 现有本地 secret backend（`file`/`mock`）可以承接“本地文件有值”的形态，但不会替代分发/轮换/审计流程。
@@ -699,8 +695,9 @@ notes: "Applied after review; no secrets included."
 3. preflight 的“AK 注入”判定与执行点：
    - 要检测哪些来源（环境变量/常见凭证文件/容器注入）？
    - 在 `role-only` 的 fail-fast 与 `auto` 的 warn/record 的边界怎么写死？
-4. secrets（云端 SSOT）的产品与流程细节（便利性 + 多项目复用）：
-   - 云端 secrets 的命名空间：project vs shared（以及共享边界与权限一致性要求）
+4. secrets（外部 SSOT）的产品与流程细节（便利性 + 多项目复用）：
+   - （已对齐）v1 使用 Bitwarden（免费版起步，2 人测试期），并采用：`dev(local)=pull`，`staging/prod(ECS)=pull+push 注入`；ECS 运行时不直接访问 Bitwarden。
+   - Bitwarden 中如何稳定映射 `secret_ref`：vault/collection/item/field 的约定（需要补齐，确保脚本/LLM 可确定性生成）。
    - （已对齐）`dev(local)` bootstrap 身份链与缓存策略（以便利性为主：SSO/RAM User→STS；允许缓存短期 STS；禁止长期 AK 注入项目运行配置）
    - （已对齐）`dev-reader` 最小读权限：`/<org>/<project>/dev/*` + `/<org>/shared/*`；多账号 profile：`<org>-<account-alias>`（不编码 env）
    - （已对齐）写入/轮换执行方式：人工在本地/运维机执行；留痕目录：`ops/secrets/handbook/`
@@ -726,7 +723,7 @@ notes: "Applied after review; no secrets included."
 1. 固化 `docs/project/policy.yaml` v1 schema（字段清单 + 枚举 + 合并规则 + unknown-field 策略，见上文 “L”）。
 2. 出一份最小 `docs/project/policy.yaml` 草案（按 v1 schema；暂不引入 `app` 维度）。
 3. 定义 preflight 规范（检测项清单 + role-only 的 fail-fast 规则 + auto 的 warn/record 规则）。
-4. 明确 secrets 云端 SSOT 的命名/权限/写入与拉取流程（含 dev 上云与 shared 边界），并补齐轮换/审计/回滚最小规范。
+4. 明确 secrets 外部 SSOT（v1=Bitwarden）的命名/权限/写入与拉取流程（含 shared 边界），并补齐轮换/审计/回滚最小规范。
 5. 明确 IaC 执行身份与运行位置（优先 role/STS；AK 仅限 `workload=iac` 且不注入运行时），并约定 `ops/iac/handbook/` 留痕模板。
 6. 固化 v1 运行时 roles 的命名与最小权限包（按 env 粒度），并确定后续按 workload 拆分的升级路径。
 
@@ -735,13 +732,14 @@ notes: "Applied after review; no secrets included."
 ## 变更记录（人工维护）
 
 - 2026-02-02：创建本文档，记录“ECS prod 强制 role-only、第三方 key 隔离、IAM 走 IaC、aliyun-only=>ROS / multi-cloud=>Terraform 的选型策略、首次选型确认门”的一致结论。
-- 2026-02-03：补齐 secrets 云端 SSOT（含 dev）与命名规范（project/env 分层 + shared 全局）、多账号默认隔离策略、v1 runtime role 粒度与命名、以及 v1 最小权限白名单的默认取值（OSS read-only、MQ 默认 MNS、验证服务默认阿里云 API、LLM 支持第三方/阿里云并按功能拆分）。
+- 2026-02-03：补齐 secrets SSOT 与命名规范（project/env 分层 + shared 全局）、多账号默认隔离策略、v1 runtime role 粒度与命名、以及 v1 最小权限白名单的默认取值（OSS read-only、MQ 默认 MNS、验证服务默认阿里云 API、LLM 支持第三方/阿里云并按功能拆分）。
 - 2026-02-03：补齐 OSS bucket（每 env 1 个、无 object prefix 白名单）、MNS（Topic/Subscription、多 topic、命名前缀白名单、v1 runtime 默认 publish+subscribe）、以及验证服务覆盖范围（短信/邮件/验证码/人机验证）。
 - 2026-02-03：补齐 LLM v1 功能最小集（chat/embeddings/moderation）与第三方 LLM API key 默认放 shared（并给出对应 secret_ref 建议）。
 - 2026-02-03：补齐 secrets 运维流程 v1（人工本地/运维机执行）与目录留痕约定（`ops/secrets/` + `ops/secrets/handbook/`）。
 - 2026-02-03：补齐 IaC 执行模型 v1（`plan` 走 CI，`apply` 走人工）。
 - 2026-02-03：补齐 IaC `plan` 的 CI 身份约束（OIDC→STS/RAM Role，禁用 AK）与证据归档策略（CI artifact + `ops/iac/handbook/` 归档）。
-- 2026-02-03：补齐 `dev(local)` 拉取云端 secrets 的身份链与缓存策略（以便利性为主：SSO/RAM User→STS，允许缓存短期 STS，禁止长期 AK 注入项目运行配置）。
+- 2026-02-03：补齐 `dev(local)` 拉取 secrets 的身份链与缓存策略（以便利性为主：SSO/RAM User→STS，允许缓存短期 STS，禁止长期 AK 注入项目运行配置）。
+- 2026-02-04：对齐 secrets SSOT v1：采用 Bitwarden（免费版起步，2 人测试期）；`dev(local)` 使用 `.env.local` 并由开发者 pull；`staging/prod(ECS)` 由运维机/部署机 pull 并在部署时 push 注入；ECS 运行时不直接访问 Bitwarden；ECS 部署形态推荐 `docker compose` + `systemd` 托管。
 - 2026-02-03：补齐 `dev-reader` 最小读权限前缀与多账号 profile 命名（`<org>-<account-alias>`）。
 - 2026-02-03：补齐 `ops/iac/handbook/` 与 `ops/secrets/handbook/` 的 v1 默认留痕字段（meta.yaml 模板）。
 - 2026-02-03：对齐“不再生成任何 `<env>.yaml`”：资源清单以 IaC state+outputs 为准，环境目标描述/生成输入统一放 `docs/project/policy.yaml`（`policy.env`）。
