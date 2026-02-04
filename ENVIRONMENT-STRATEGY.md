@@ -704,6 +704,17 @@ notes: "Applied after review; no secrets included."
 
 > **结论（已对齐）**：稳态不生成/不维护任何 `<env>.yaml` 形式的“资源清单文件”；云端资源清单以 IaC state+outputs 为准。环境目标描述/生成输入统一放到 `docs/project/policy.yaml`（`policy.env`）里。
 
+### W. 非敏感 values（v1 选择 A）：写入 `env/values/<env>.yaml`（从 IaC outputs 生成）
+
+> 目标：实现“环境一键复用”，避免本地/运维每次都手工找实例名、endpoint、bucket、region 等非敏感值。
+
+- **SSOT**：非敏感值以 **IaC outputs** 为准（与 V 一致），`env/values/<env>.yaml` 是可再生的“派生缓存”。
+- **内容边界**：只放非敏感值（endpoint/host/port/region/bucket/topic 名等）；任何包含口令/密钥/token 的值一律走 Bitwarden secrets（例如 `DATABASE_URL` 若包含密码，应作为 secret）。
+- **生成方式（约定）**：
+  - `dev(local)`：从 dev 环境的 IaC outputs 拉取 → 生成/刷新 `env/values/dev.yaml`。
+  - `staging/prod(ECS)`：从对应环境 IaC outputs 拉取 → 生成/刷新 `env/values/<env>.yaml`（可在部署机侧生成，也可作为 CI plan 的可读产物，不作为 secrets 承载）。
+- **与策略 SSOT 的关系**：`docs/project/policy.yaml` 仍是“目标/策略/合并规则”的 SSOT；`env/values/<env>.yaml` 仅承载派生的非敏感运行参数，不承载“环境目标描述/选择”。
+
 ## 建议的“首次搭建选型确认门”（需要后续落地到流程/脚本）
 
 在第一次启用环境体系时，引导并记录以下选择（机器可读）：
