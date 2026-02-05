@@ -25,7 +25,7 @@ In the blueprint (`init/_work/project-blueprint.json`):
 { "iac": { "tool": "terraform" } }
 ```
 
-Supported tools: `none | ros | terraform`.
+Supported tools: `none | ros | terraform | opentofu`.
 
 Stage C `apply` runs:
 

@@ -81,7 +81,7 @@ Avoid when:
 - Inventory: `env/inventory/<env>.yaml`
   - Optional when policy targets match
   - If both exist, policy targets take precedence
-  - Use `--runtime-target` / `--workload` to select policy targets
+  - Use `--runtime-target` / `--workload` to select policy targets (`runtime_target`: `local | ecs`; `remote` is an alias for `ecs`)
   - For `envfile` (or legacy `ecs-envfile`), inventory must include `injection.env_file` (see references)
   - For remote injection, set `injection.transport: ssh` and `injection.ssh` (hosts + auth)
     - Host sources may be hand-maintained (`ssh.hosts`) or IaC outputs (`ssh.hosts_file`)
@@ -137,7 +137,7 @@ first with `env-localctl`, then plan/apply with `env-cloudctl`:
 python3 -B -S .ai/skills/features/environment/env-localctl/scripts/env_localctl.py compile \
   --root . \
   --env staging \
-  --runtime-target remote \
+  --runtime-target ecs \
   --workload api \
   --env-file ops/deploy/env-files/staging.env \
   --no-context
@@ -147,7 +147,7 @@ python3 -B -S .ai/skills/features/environment/env-localctl/scripts/env_localctl.
 python3 -B -S .ai/skills/features/environment/env-cloudctl/scripts/env_cloudctl.py plan \
   --root . \
   --env staging \
-  --runtime-target remote \
+  --runtime-target ecs \
   --workload api
 ```
 
@@ -157,7 +157,7 @@ Apply (transport: `local`):
 python3 -B -S .ai/skills/features/environment/env-cloudctl/scripts/env_cloudctl.py apply \
   --root . \
   --env staging \
-  --runtime-target remote \
+  --runtime-target ecs \
   --workload api \
   --approve
 ```
@@ -168,7 +168,7 @@ Apply (transport: `ssh`):
 python3 -B -S .ai/skills/features/environment/env-cloudctl/scripts/env_cloudctl.py apply \
   --root . \
   --env staging \
-  --runtime-target remote \
+  --runtime-target ecs \
   --workload api \
   --approve \
   --approve-remote
@@ -180,7 +180,7 @@ Optional remote verification (only for `transport: ssh`):
 python3 -B -S .ai/skills/features/environment/env-cloudctl/scripts/env_cloudctl.py verify \
   --root . \
   --env staging \
-  --runtime-target remote \
+  --runtime-target ecs \
   --workload api \
   --remote \
   --approve-remote

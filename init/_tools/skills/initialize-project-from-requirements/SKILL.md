@@ -15,14 +15,14 @@ Goal: a robust, repeatable, rollback-friendly initialization workflow (not "fast
 The init kit is intended to be **LLM-driven** (or human-driven with the same discipline):
 
 - `init/START-HERE.md` (LLM-maintained): user-friendly intake + running notebook
-  - Keep it one-screen: current conclusions, a key inputs table (`todo`/`confirmed`/`tbd`), and a short "AI questions" list.
+  - Keep START-HERE one-screen: current conclusions, a key inputs table (`todo`/`confirmed`/`tbd`), and a short "AI questions" list.
   - Older context goes to a folded Archive section at the end (append-only; LLM-written).
 - `init/INIT-BOARD.md` (LLM-owned layout): concise stage/status board
-  - The pipeline updates ONLY a machine snapshot block inside INIT-BOARD (between snapshot markers). It never rewrites the whole file.
+  - The pipeline updates ONLY a machine snapshot block inside INIT-BOARD (between snapshot markers). The pipeline never rewrites the whole file.
   - Board content SHOULD be derived from `init/_work/.init-state.json` (audit trail) and the machine snapshot block, not from chat history.
 - Language (LLM-managed; supports more than zh/en without script changes):
   - Ask the user to confirm the documentation language.
-  - Record it in `init/_work/.init-state.json` under `llm.language` (string; free-form).
+  - Record the selected language in `init/_work/.init-state.json` under `llm.language` (string; free-form).
     - Preferred: `node init/_tools/skills/initialize-project-from-requirements/scripts/init-pipeline.mjs set-llm-language --repo-root . --value "<language>"`
   - Render `init/START-HERE.md` and `init/INIT-BOARD.md` in that language.
 - Pipeline language (zh/en):

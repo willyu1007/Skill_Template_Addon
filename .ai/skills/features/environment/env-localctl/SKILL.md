@@ -64,6 +64,7 @@ Avoid when:
 - Secret references: `env/secrets/<env>.ref.yaml`
 - Secret material: resolved via secret backends (e.g., mock file store, environment, or file reference)
 - Policy (preflight/auth): `docs/project/policy.yaml` (selects `auth_mode` + `preflight` rules via `env/runtime_target/workload`)
+  - `runtime_target` supports `local | ecs` (`remote` is accepted as an alias for `ecs`)
 
 ## Outputs (evidence + generated artifacts)
 
@@ -97,7 +98,7 @@ Use the same controller on a deploy machine to render a target env-file without 
 python3 -B -S .ai/skills/features/environment/env-localctl/scripts/env_localctl.py compile \
   --root . \
   --env staging \
-  --runtime-target remote \
+  --runtime-target ecs \
   --workload api \
   --env-file /etc/<org>/<project>/staging.env \
   --no-context \
