@@ -41,8 +41,8 @@ node .ai/skills/features/deployment/scripts/deployctl.mjs verify
 Optional (recommended for LLM routing): record the flag in project state:
 
 ```bash
-node .ai/scripts/projectctl.mjs init
-node .ai/scripts/projectctl.mjs set features.deployment true
+node .ai/scripts/ctl-project-state.mjs init
+node .ai/scripts/ctl-project-state.mjs set features.deployment true
 ```
 
 ## Operating rules

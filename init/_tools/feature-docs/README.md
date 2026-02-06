@@ -8,7 +8,7 @@ This template does **not** ship an `addons/` directory. Feature assets are integ
 - Control scripts:
   - Repo-level Node controllers: `.ai/scripts/*ctl.mjs` (and other repo controllers like `sync-skills.mjs`)
   - Feature-local tools: `.ai/skills/features/**/scripts/*` (Node `.mjs` and/or Python `.py`)
-- Feature flags/state: `.ai/project/state.json` (via `.ai/scripts/projectctl.mjs`)
+- Feature flags/state: `.ai/project/state.json` (via `.ai/scripts/ctl-project-state.mjs`)
 
 ## Available features
 

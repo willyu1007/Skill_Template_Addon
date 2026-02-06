@@ -38,8 +38,8 @@ node .ai/skills/features/packaging/scripts/packctl.mjs verify
 Optional (recommended for LLM routing): record the flag in project state:
 
 ```bash
-node .ai/scripts/projectctl.mjs init
-node .ai/scripts/projectctl.mjs set features.packaging true
+node .ai/scripts/ctl-project-state.mjs init
+node .ai/scripts/ctl-project-state.mjs set features.packaging true
 ```
 
 ## Operating rules

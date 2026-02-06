@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * projectctl.mjs
+ * ctl-project-state.mjs
  *
  * Project state and configuration management for the Context Awareness feature.
  *
@@ -24,7 +24,7 @@ import path from 'node:path';
 function usage(exitCode = 0) {
   const msg = `
 Usage:
-  node .ai/scripts/projectctl.mjs <command> [options]
+  node .ai/scripts/ctl-project-state.mjs <command> [options]
 
 Commands:
   help
@@ -57,11 +57,11 @@ Commands:
     Verify project state consistency.
 
 Examples:
-  node .ai/scripts/projectctl.mjs init
-  node .ai/scripts/projectctl.mjs set-context-mode contract
-  node .ai/scripts/projectctl.mjs status
-  node .ai/scripts/projectctl.mjs get context.mode
-  node .ai/scripts/projectctl.mjs set custom.project.version 1.0.0
+  node .ai/scripts/ctl-project-state.mjs init
+  node .ai/scripts/ctl-project-state.mjs set-context-mode contract
+  node .ai/scripts/ctl-project-state.mjs status
+  node .ai/scripts/ctl-project-state.mjs get context.mode
+  node .ai/scripts/ctl-project-state.mjs set custom.project.version 1.0.0
 `;
   console.log(msg.trim());
   process.exit(exitCode);

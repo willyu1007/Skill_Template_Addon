@@ -47,8 +47,8 @@ node .ai/skills/features/observability/scripts/obsctl.mjs verify
 Optional (recommended for LLM routing): record the flag in project state:
 
 ```bash
-node .ai/scripts/projectctl.mjs init
-node .ai/scripts/projectctl.mjs set features.observability true
+node .ai/scripts/ctl-project-state.mjs init
+node .ai/scripts/ctl-project-state.mjs set features.observability true
 ```
 
 ## Verification

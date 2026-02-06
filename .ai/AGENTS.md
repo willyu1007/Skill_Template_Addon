@@ -15,6 +15,9 @@
 
 ## Routing
 
+- If the task is **project-level progress governance** (project hub, task registry, progress aggregation, mapping tasks to Feature/Requirement/Milestone):
+  - Open: `.ai/project/AGENTS.md`
+  - Use workflows: `project-orchestrator`, `project-status-reporter`, `project-sync-lint`
 - If the task is **LLM engineering** (provider integration, calling wrappers, profiles, prompts, cost/telemetry, credentials/config keys):
   - Open: `.ai/llm-config/AGENTS.md`
   - Invoke workflow skill: `llm-engineering`

@@ -2285,14 +2285,14 @@ function ensureFeature(repoRoot, featureId, apply, ctlScriptName, options = {}) 
   result.actions.push(...copyRes.actions);
 
   // Mark feature enabled in project state (best-effort)
-  const projectctl = path.join(repoRoot, '.ai', 'scripts', 'projectctl.mjs');
-  if (fs.existsSync(projectctl)) {
+  const projectStateCtl = path.join(repoRoot, '.ai', 'scripts', 'ctl-project-state.mjs');
+  if (fs.existsSync(projectStateCtl)) {
     const key = stateKey || featureId;
     result.actions.push(
-      runNodeScriptWithRepoRootFallback(repoRoot, projectctl, ['set', `features.${key}`, 'true', '--repo-root', repoRoot], apply)
+      runNodeScriptWithRepoRootFallback(repoRoot, projectStateCtl, ['set', `features.${key}`, 'true', '--repo-root', repoRoot], apply)
     );
   } else {
-    result.warnings.push('projectctl.mjs not found; skipping .ai/project feature flag update.');
+    result.warnings.push('ctl-project-state.mjs not found; skipping .ai/project feature flag update.');
   }
 
   // Optional: run feature controller init/verify (best-effort)
@@ -2318,13 +2318,13 @@ function ensureFeature(repoRoot, featureId, apply, ctlScriptName, options = {}) 
 }
 
 function markProjectFeature(repoRoot, featureKey, apply) {
-  const projectctl = path.join(repoRoot, '.ai', 'scripts', 'projectctl.mjs');
-  if (!fs.existsSync(projectctl)) {
-    return { op: 'skip', path: projectctl, mode: apply ? 'skipped' : 'dry-run', reason: 'projectctl.mjs not found' };
+  const projectStateCtl = path.join(repoRoot, '.ai', 'scripts', 'ctl-project-state.mjs');
+  if (!fs.existsSync(projectStateCtl)) {
+    return { op: 'skip', path: projectStateCtl, mode: apply ? 'skipped' : 'dry-run', reason: 'ctl-project-state.mjs not found' };
   }
   return runNodeScriptWithRepoRootFallback(
     repoRoot,
-    projectctl,
+    projectStateCtl,
     ['set', `features.${featureKey}`, 'true', '--repo-root', repoRoot],
     apply
   );
@@ -2601,7 +2601,7 @@ function ensureContextAwarenessFeature(repoRoot, blueprint, apply, options = {})
   result.actions.push(...copyRes.actions);
 
   const contextctl = path.join(repoRoot, '.ai', 'skills', 'features', 'context-awareness', 'scripts', 'contextctl.mjs');
-  const projectctl = path.join(repoRoot, '.ai', 'scripts', 'projectctl.mjs');
+  const projectStateCtl = path.join(repoRoot, '.ai', 'scripts', 'ctl-project-state.mjs');
 
   if (!fs.existsSync(contextctl)) {
     result.errors.push('contextctl.mjs not found under .ai/skills/features/context-awareness/scripts/.');
@@ -2609,14 +2609,14 @@ function ensureContextAwarenessFeature(repoRoot, blueprint, apply, options = {})
   }
 
   // Ensure project state exists and mark flags
-  if (fs.existsSync(projectctl)) {
-    // projectctl init is handled by the main Stage C apply flow; set operations are idempotent even without init.
-    result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, projectctl, ['set', 'features.contextAwareness', 'true', '--repo-root', repoRoot], apply));
-    result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, projectctl, ['set', 'context.enabled', 'true', '--repo-root', repoRoot], apply));
+  if (fs.existsSync(projectStateCtl)) {
+    // ctl-project-state init is handled by the main Stage C apply flow; set operations are idempotent even without init.
+    result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, projectStateCtl, ['set', 'features.contextAwareness', 'true', '--repo-root', repoRoot], apply));
+    result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, projectStateCtl, ['set', 'context.enabled', 'true', '--repo-root', repoRoot], apply));
     const mode = getContextMode(blueprint);
-    result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, projectctl, ['set-context-mode', mode, '--repo-root', repoRoot], apply));
+    result.actions.push(runNodeScriptWithRepoRootFallback(repoRoot, projectStateCtl, ['set-context-mode', mode, '--repo-root', repoRoot], apply));
   } else {
-    result.warnings.push('projectctl.mjs not found; skipping project state initialization.');
+    result.warnings.push('ctl-project-state.mjs not found; skipping project state initialization.');
   }
 
   // Initialize docs/context skeleton and registry (idempotent)
@@ -3851,11 +3851,20 @@ if (command === 'validate') {
     const verifyFailures = [];
 
     // Ensure project state exists (records enabled features for LLMs and tooling)
-    const projectctlPath = path.join(repoRoot, '.ai', 'scripts', 'projectctl.mjs');
-    if (fs.existsSync(projectctlPath)) {
-      const initRes = runNodeScriptWithRepoRootFallback(repoRoot, projectctlPath, ['init', '--repo-root', repoRoot], true);
+    const projectStateCtlPath = path.join(repoRoot, '.ai', 'scripts', 'ctl-project-state.mjs');
+    if (fs.existsSync(projectStateCtlPath)) {
+      const initRes = runNodeScriptWithRepoRootFallback(repoRoot, projectStateCtlPath, ['init', '--repo-root', repoRoot], true);
       if (initRes.mode === 'failed') {
-        console.warn('[warn] projectctl init failed; feature flags may not be recorded.');
+        console.warn('[warn] ctl-project-state init failed; feature flags may not be recorded.');
+      }
+    }
+
+    // Initialize project governance hub (best-effort; idempotent)
+    const projectGovernanceCtlPath = path.join(repoRoot, '.ai', 'scripts', 'ctl-project-governance.mjs');
+    if (fs.existsSync(projectGovernanceCtlPath)) {
+      const initHubRes = runNodeScriptWithRepoRootFallback(repoRoot, projectGovernanceCtlPath, ['init', '--project', 'main', '--repo-root', repoRoot], true);
+      if (initHubRes.mode === 'failed') {
+        console.warn('[warn] ctl-project-governance init failed; project hub may not be initialized.');
       }
     }
 

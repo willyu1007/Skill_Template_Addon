@@ -1,7 +1,7 @@
 # 00 Overview
 
 ## Status
-- State: planned | in-progress | blocked | done
+- State: planned
 - Next step: <!-- one concrete next action -->
 
 ## Goal

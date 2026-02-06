@@ -46,7 +46,7 @@
 Minimum:
 
 - `node .ai/skills/features/context-awareness/scripts/contextctl.mjs verify --strict`
-- `node .ai/scripts/projectctl.mjs verify`
+- `node .ai/scripts/ctl-project-state.mjs verify`
 
 For generated mode artifacts, run your generators **before** the verify step.
 

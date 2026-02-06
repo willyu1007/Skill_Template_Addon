@@ -354,7 +354,7 @@ Optional (configuration only; does not trigger enabling):
 
 - `.ai/skills/features/context-awareness/scripts/contextctl.mjs`
   - `init`: initializes the `docs/context/` scaffold (idempotent)
-- `.ai/scripts/projectctl.mjs`
+- `.ai/scripts/ctl-project-state.mjs`
   - `init`: initializes `.ai/project/state.json` (idempotent)
   - `set-context-mode <contract|snapshot>`: sets the context mode
 - `.ai/skills/_meta/skillpacksctl.mjs`

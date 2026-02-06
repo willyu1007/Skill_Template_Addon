@@ -24,6 +24,7 @@ Template repository. Users clone the repository to start new AI-friendly project
 | **First time / Project setup** | `init/AGENTS.md` |
 | **Skill authoring / maintenance** | `.ai/AGENTS.md` |
 | **LLM engineering** | `.ai/llm-config/AGENTS.md` |
+| **Project progress governance** | `.ai/project/AGENTS.md` |
 | **Complex task documentation** | `dev-docs/AGENTS.md` |
 
 ## Global Rules
